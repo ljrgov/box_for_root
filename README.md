@@ -1,6 +1,6 @@
 # Box for Root
 
-> Fork 自 [taamarin/box_for_magisk](https://github.com/taamarin/box_for_magisk)，用于个人使用。
+>  根据自己需求稍作调整，用于个人使用。
 
 ## 说明
 
