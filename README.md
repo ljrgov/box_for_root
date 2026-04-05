@@ -4,10 +4,11 @@
 
 ## 说明
 
-本仓库 fork 自 [taamarin](https://github.com/taamarin) 的 box_for_magisk，同时参考了 [boxproxy](https://github.com/boxproxy/box) 的部分实现，按个人需求做了调整。
+本仓库 fork 自 [taamarin](https://github.com/taamarin) 的 box_for_magisk，同时参考了 [boxproxy](https://github.com/boxproxy/box) & [boxproxy](https://github.com/boxproxy/box)的部分实现，按个人需求做了调整。
 
 上游项目：
 - [taamarin/box_for_magisk](https://github.com/taamarin/box_for_magisk)
+- [boxproxy](https://github.com/boxproxy/box)
 - [boxproxy](https://github.com/boxproxy/box)
 
 ## 使用方法
