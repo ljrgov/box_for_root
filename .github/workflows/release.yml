@@ -105,4 +105,4 @@ jobs:
 
           export VERSION=$(git rev-parse --short HEAD)
           export COMMIT=$(git log --oneline -n 10 --no-decorate | sed 's/^[0-9a-f]* //' | sed 's/^/— /')
-          python3 .github/taamarinbot.py "$FILE"
+          python3 .github/boxrootbot.py "$FILE"
