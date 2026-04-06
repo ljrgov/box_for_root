@@ -1,4 +1,4 @@
-// telegram 上传脚本
+# telegram 上传脚本
 
 import asyncio
 import os
@@ -22,7 +22,7 @@ MSG_TEMPLATE = """
 [Github](https://github.com/taamarin/box_for_magisk)
 [Releases](https://github.com/taamarin/box_for_magisk/releases)
 
-#module #ksu #apatch #magisk #bfr #debug
+#module #ksu #apatch #magisk #root #debug
 """.strip()
 
 def get_caption():
