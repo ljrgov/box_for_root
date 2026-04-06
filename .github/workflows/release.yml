@@ -71,7 +71,7 @@ jobs:
           git commit -m "${{ github.event.inputs.tag }}" || echo "No changes to commit"
           git push origin "${{ github.event.inputs.branch }}" --force
 
-      # 5. Run build script
+      # 5. 运行构建脚本
       - name: Run build.sh
         run: |
           chmod +x build.sh
