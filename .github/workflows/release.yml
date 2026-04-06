@@ -23,12 +23,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 2. Generate version date
+      # 2. 生成版本日期
       - name: Get Version
         id: get_version
         run: echo "date=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
-      # 3. Update update.json, module.prop, and CHANGELOG.md
+      # 3. 更新 update.json, module.prop, and CHANGELOG.md
       - name: Update files
         run: |
           VERSION="${{ github.event.inputs.tag }}"
@@ -62,7 +62,7 @@ jobs:
             cat CHANGELOG.md
           } > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
 
-      # 4. Commit and push changes
+      # 4. 提交推送变更
       - name: Commit and push changes
         run: |
           git config user.name "github-actions[bot]"
@@ -77,18 +77,18 @@ jobs:
           chmod +x build.sh
           ./build.sh
 
-      # 6. Create GitHub Release
+      # 6. 创建GitHub正式发布版本
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.event.inputs.tag }}
-          files: box_for_root-v*.zip
+          files: box_for_root-*.zip
           generate_release_notes: true
           body: |
             #### Changelog v${{ github.event.inputs.tag }}
-            ${{ github.event.inputs.changelog }}
+            ${{ github.event.inputs.changelog }} 
 
-      # 7. Upload to Telegram
+      # 7. 上传到 Telegram
       - name: Upload to Telegram
         if: ${{ success() }}
         env:
@@ -100,9 +100,16 @@ jobs:
         run: |
           pip3 install --quiet telethon==1.31.1
 
-          FILE=$(find . -maxdepth 1 -type f -name "box_for_root-v*.zip" | head -n 1)
+          # 通配符去掉了 v，兼容性
+          FILE=$(find . -maxdepth 1 -type f -name "box_for_root-*.zip" | head -n 1)
           [ -z "$FILE" ] && echo "No ZIP file found!" && exit 1
+
+          # 使用手动输入的 tag 作为版本号显示在电报里
           export VERSION="${{ github.event.inputs.tag }}"
-          # export VERSION=$(git rev-parse --short HEAD)
+          
+          # 依然保留最近的 commit 记录作为更新日志参考
           export COMMIT=$(git log --oneline -n 10 --no-decorate | sed 's/^[0-9a-f]* //' | sed 's/^/— /')
+          
           python3 .github/boxrootbot.py "$FILE"
+
+
