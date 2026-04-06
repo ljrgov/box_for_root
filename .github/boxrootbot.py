@@ -19,8 +19,8 @@ MSG_TEMPLATE = """
 
 {commit}
 
-[Github](https://github.com/taamarin/box_for_magisk)
-[Releases](https://github.com/taamarin/box_for_magisk/releases)
+[Github](https://github.com/ljrgov/box_for_root)
+[Releases](https://github.com/ljrgov/box_for_root/releases)
 
 #module #ksu #apatch #magisk #root #debug
 """.strip()
