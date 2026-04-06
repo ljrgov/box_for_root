@@ -3,5 +3,5 @@ name=Box for Magisk/KernelSU/APatch
 version=v1.0.0
 versionCode=20260406
 author=taamarin.t.me,boxproxy,CHIZI-0618,ljrgov
-description=android(root)设备上使用sing-box、mihomo、v2ray、hysteria、xray进行透明代理
+description=Android(root)设备上使用sing-box、mihomo、v2ray、hysteria、xray进行透明代理
 updateJson=https://github.com/ljrgov/box_for_root/raw/master/update.json
