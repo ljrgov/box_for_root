@@ -1,4 +1,4 @@
-Name: debug
+name: debug
 
 on:
   workflow_dispatch:
@@ -17,31 +17,54 @@ jobs:
   build:
     runs-on: ubuntu-latest
     outputs:
-      should_upload: ${{ steps.check_ci.outputs.should_upload }}
-      version: ${{ steps.get_info.outputs.version }}
-
+      version: ${{ steps.get_version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Process Version and Metadata
-        id: get_info
+      - name: Update Module Metadata
+        id: get_version
         run: |
-          # 获取原始版本号
+          # 提取原始版本号并加上 commit hash
           RAW_VER=$(grep 'version=' module.prop | cut -d'=' -f2)
-          # 获取短提交号
           SHORT_SHA=$(git rev-parse --short HEAD)
-          # 组合新版本号: 1.0.0 -> 1.0.0(a1b2c3d)
           NEW_VER="${RAW_VER}(${SHORT_SHA})"
           
-          # 仅替换以 version= 开头的行
+          # 直接修改文件
           sed -i "s/^version=.*/version=${NEW_VER}/" module.prop
           sed -i "s/^versionCode=.*/versionCode=$(date +%Y%m%d)/" module.prop
           
+          # 输出给当前 Step 和后续 Job 使用
           echo "version=${NEW_VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Debug Asset
+        run: |
+          # 创建一个干净的临时目录存放要打包的文件
+          mkdir -p ./box_debug_out
+          # 复制文件，排除不需要的内容
+          cp -r ./* ./box_debug_out/
+          rm -rf ./box_debug_out/.git ./box_debug_out/.github ./box_debug_out/docs ./box_debug_out/box_debug_out
           
-          # 检查提交信息是否包含 [ci]
+      - name: Upload Debug Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # 这里的名字会带上版本号，方便你下载调试
+          name: "box_for_root_${{ steps.get_version.outputs.version }}"
+          path: ./box_debug_out/
+
+  upload:
+    runs-on: ubuntu-latest
+    needs: build
+    # 依然保留你的 [ci] 检查逻辑
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for [ci] in commit message
+        id: check_ci
+        run: |
           COMMIT_MSG=$(git log -1 --pretty=%B)
           if [[ "$COMMIT_MSG" == *"[ci]"* ]]; then
             echo "should_upload=true" >> "$GITHUB_OUTPUT"
@@ -49,53 +72,37 @@ jobs:
             echo "should_upload=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Prepare Debug Folder
-        run: |
-          mkdir -p ./out_debug
-          # 使用 rsync 或 cp 排除不需要的文件，这样比 find 更直观
-          rsync -rr ./ ./out_debug/ \
-            --exclude ".git*" \
-            --exclude "CHANGELOG.md" \
-            --exclude "update.json" \
-            --exclude "build.sh" \
-            --exclude ".github" \
-            --exclude "docs"
-          # 此时 ./out_debug 里的 module.prop 已经是修改后的了
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      - name: Download Built Files
+        if: steps.check_ci.outputs.should_upload == 'true'
+        uses: actions/download-artifact@v4
         with:
-          name: "box_for_root_${{ steps.get_info.outputs.version }}"
-          path: ./out_debug/
+          name: "box_for_root_${{ needs.build.outputs.version }}"
+          path: ./release_temp
 
-      # 如果需要发布，直接在这里打包
-      - name: Package ZIP
-        if: steps.get_info.outputs.should_upload == 'true'
-        run: |
-          cd ./out_debug && zip -r ../box_for_root-${{ steps.get_info.outputs.version }}.zip ./*
-
-      - name: Create GitHub Release
-        if: steps.get_info.outputs.should_upload == 'true'
+      - name: Create Release ZIP and Publish
+        if: steps.check_ci.outputs.should_upload == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "pre-${{ steps.get_info.outputs.version }}" *.zip \
-            --prerelease \
-            --title "Pre-release ${{ steps.get_info.outputs.version }}" \
-            --notes "Pre-release build from commit $(git rev-parse --short HEAD)"
-
-      - name: Upload to Telegram
-        if: steps.get_info.outputs.should_upload == 'true' && secrets.BOT_TOKEN != ''
-        env:
+          # 注入电报需要的环境变量
           CHAT_ID: "-1003729279105"
           MESSAGE_THREAD_ID: "3729279105"
           API_ID: ${{ secrets.API_ID }}
           API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
-          export VERSION="${{ steps.get_info.outputs.version }}"
-          # 获取最近5条提交记录用于电报通知
+          # 进入下载好的目录进行打包
+          cd ./release_temp
+          ZIP_NAME="box_for_root-${{ needs.build.outputs.version }}.zip"
+          zip -r "../$ZIP_NAME" ./*
+          cd ..
+          
+          # GitHub Release
+          gh release create "pre-${{ needs.build.outputs.version }}" "$ZIP_NAME" \
+            --prerelease --title "Pre-release ${{ needs.build.outputs.version }}" \
+            --notes "Build from commit $(git rev-parse --short HEAD)"
+            
+          # Telegram 上传
           export COMMIT=$(git log --oneline -n 5 --no-decorate | sed 's/^[0-9a-f]* //' | sed 's/^/— /')
-          FILE=$(ls *.zip)
           pip3 install telethon==1.31.1
-          python3 .github/boxrootbot.py "$FILE"
+          python3 .github/boxrootbot.py "$ZIP_NAME"
