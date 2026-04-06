@@ -92,8 +92,8 @@ jobs:
       - name: Upload to Telegram
         if: ${{ success() }}
         env:
-          CHAT_ID: "-100xfgghh"
-          MESSAGE_THREAD_ID: "282gghh"
+          CHAT_ID: "-1003729279105"
+          MESSAGE_THREAD_ID: ""
           API_ID: ${{ secrets.API_ID }}
           API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
