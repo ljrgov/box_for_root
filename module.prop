@@ -5,3 +5,4 @@ versionCode=20260406
 author=taamarin.t.me,boxproxy,CHIZI-0618,ljrgov
 description=安卓(root)设备上使用sing-box、mihomo、v2ray、hysteria、xray进行透明代理
 updateJson=https://raw.githubusercontent.com/ljrgov/box_for_root/refs/heads/master/update.json
+banner=box.png
