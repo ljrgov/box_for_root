@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release Tag'
+        description: '发布版本标签'
         required: true
       branch:
-        description: 'Push Changes Branch'
+        description: '推送的目标分支'
         required: true
       changelog:
-        description: 'Changelog Content'
+        description: '变更日志内容'
         required: true
 
 jobs:
