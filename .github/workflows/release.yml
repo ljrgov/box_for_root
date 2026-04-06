@@ -42,7 +42,7 @@ jobs:
             "version": "$VERSION",
             "versionCode": "$DATE_NUM",
             "zipUrl": "https://github.com/ljrgov/box_for_root/releases/download/$VERSION/box_for_root-$VERSION.zip",
-            "changelog": "https://github.com/ljrgov/box_for_root/raw/master/CHANGELOG.md"
+            "changelog": "https://raw.githubusercontent.com/ljrgov/box_for_root/refs/heads/master/CHANGELOG.md"
           }
           EOF
 
