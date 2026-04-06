@@ -1,4 +1,4 @@
-# 📦 Box for Root
+# Box for Root
 
 >  根据自己需求稍作调整。
 
