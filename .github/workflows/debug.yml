@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4.1.0
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -86,8 +86,8 @@ jobs:
       - name: Upload to Telegram
         if: steps.check_ci.outputs.should_upload == 'true'
         env:
-          CHAT_ID: "-1001597117hhhh"
-          MESSAGE_THREAD_ID: "282ggh"
+          CHAT_ID: "-1003729279105"
+          MESSAGE_THREAD_ID: ""
           API_ID: ${{ secrets.API_ID }}
           API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
@@ -97,5 +97,5 @@ jobs:
             export COMMIT=$(git log --oneline -n 5 --no-decorate | sed 's/^[0-9a-f]* //' | sed 's/^/— /')
             FILE=$(find . -name "*.zip")
             pip3 install telethon==1.31.1
-            python3 $GITHUB_WORKSPACE/.github/taamarinbot.py "$FILE"
+            python3 $GITHUB_WORKSPACE/.github/boxrootbot.py "$FILE"
           fi
