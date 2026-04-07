@@ -27,6 +27,8 @@ jobs:
         id: get_version
         run: |
           VERSION=$(grep -oP 'version=\K[^ ]+' module.prop)
+          # Remove the leading 'v' from the version string if it exists
+          VERSION=${VERSION#v}
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Get Commit Hash
