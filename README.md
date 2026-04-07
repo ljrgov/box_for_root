@@ -4,7 +4,7 @@
 
 ## 说明
 
-本仓库 fork 自 [taamarin](https://github.com/taamarin) 的 box_for_magisk，同时参考了 [boxproxy](https://github.com/boxproxy/box) 和  [CHIZI-0618](https://github.com/CHIZI-0618/box4magisk) 的部分实现，按个人需求做了调整。
+本仓库 fork 自 [taamarin](https://github.com/taamarin) 的 box_for_magisk，同时参考了 [boxproxy](https://github.com/boxproxy/box) 和  [CHIZI-0618](https://github.com/CHIZI-0618/box4magisk) 的实现，按个人需求做了调整。
 
 上游项目：
 - [taamarin](https://github.com/taamarin/box_for_magisk)
