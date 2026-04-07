@@ -1,105 +1,94 @@
 name: debug
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   push:
     paths-ignore:
-      - 'apks/**'
-      - 'README.md'
-      - 'CHANGELOG.md'
+      - "apks/**"
+      - "README.md"
+      - "CHANGELOG.md"
     branches:
-      - 'master'
+      - master
 
 permissions:
-  contents: 'write'
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    # 将版本号导出给其他 Job 使用
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Update Module.prop
+        run: |
+          # 简化 sed 逻辑，避免多次 grep
+          CUR_VER=$(grep 'version=' module.prop | cut -d= -f2)
+          GIT_HASH=$(git rev-parse --short HEAD)
+          NEW_VER="${CUR_VER}(${GIT_HASH})"
+          sed -i "s/^version=.*/version=${NEW_VER}/" module.prop
+          sed -i "s/^versionCode=.*/versionCode=$(date +%Y%m%d)/" module.prop
 
       - name: Get Version
         id: get_version
         run: |
-          VERSION=$(grep -oP 'version=\K[^ ]+' module.prop)
-          # Remove the leading 'v' from the version string if it exists
-          VERSION=${VERSION#v}
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Get Commit Hash
-        id: get_commit_hash
-        run: |
-          COMMIT_HASH=$(git log --oneline -n 1 | awk '{print $1}' | cut -c1-7)  # Get first 7 characters of commit hash
-          echo "commit_hash=$COMMIT_HASH" >> "$GITHUB_OUTPUT"
-
-      - name: Update Module.prop
-        run: |
-          VERSION=${{ steps.get_version.outputs.version }}
-          COMMIT_HASH=${{ steps.get_commit_hash.outputs.commit_hash }}
-          sed -i "s/$(grep -oP 'version=\K[^ ]+' module.prop)/$VERSION($COMMIT_HASH)/g" module.prop
-          sed -i "s/versionCode=.*/versionCode=$(date +%Y%m%d)/g" module.prop
+          echo "version=$(grep -oP 'version=\K[^ ]+' module.prop)" >> "$GITHUB_OUTPUT"
 
       - name: Generate Asset
         run: |
-          sudo mkdir -p /box_for_root
-          sudo cp -r --parents $(find ./ -type f ! -path './.git/*' ! -name 'CHANGELOG.md' ! -name 'update.json' ! -name 'build.sh' ! -path './.github/*' ! -path './apks/*')  /box_for_root/
+          mkdir -p ./box_for_root
+          # 使用 rsync 或排除模式拷贝，避免 sudo 和复杂的 find 逻辑
+          cp -r ./ ./box_for_root/
+          rm -rf ./box_for_root/.git ./box_for_root/.github
+          # 删除不需要打包进模块的文件
+          cd ./box_for_root && rm -f CHANGELOG.md update.json build.sh
+          rm -rf apks/
 
-      - name: Upload Debug Asset => (box_for_root-v${{ steps.get_version.outputs.version }}-${{ steps.get_commit_hash.outputs.commit_hash }}.zip)
+      - name: Zip for Release
+        # 提前在 build 阶段打包，确保 upload 拿到的就是成品
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          zip -r -o -X -ll "../box_for_root-${VERSION}.zip" ./*
+          mv "../box_for_root-${VERSION}.zip" ../
+
+      - name: Upload Debug Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: box_for_root-v${{ steps.get_version.outputs.version }}-${{ steps.get_commit_hash.outputs.commit_hash }}
-          path: /box_for_root/
+          name: box_release
+          path: box_for_root-*.zip
 
   upload:
     runs-on: ubuntu-latest
     needs: build
-
+    # 只有 commit message 包含 [ci] 才会执行分发逻辑
+    if: contains(github.event.head_commit.message, '[ci]')
     steps:
-      - name: Checkout Repository (only if build is successful)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Check for [ci] in commit message
-        id: check_ci
-        run: |
-          COMMIT_MSG=$(git log -1 --pretty=%B)
-          echo "Last commit message: $COMMIT_MSG"
-          if [[ "$COMMIT_MSG" == *"[ci]"* ]]; then
-            echo "should_upload=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_upload=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Run build
-        if: steps.check_ci.outputs.should_upload == 'true'
-        run: |
-          VERSION=${{ steps.get_version.outputs.version }}
-          COMMIT_HASH=${{ steps.get_commit_hash.outputs.commit_hash }}
-          sed -i "s/$(grep -oP 'version=\K[^ ]+' module.prop)/$VERSION($COMMIT_HASH)/g" module.prop
-          zip -r -o -X -ll box_for_root-v${VERSION}-${COMMIT_HASH}.zip ./ \
-            -x '.git/*' -x 'CHANGELOG.md' -x 'update.json' -x 'build.sh' -x '.github/*' -x 'apks/*'
+      - name: Download Asset
+        uses: actions/download-artifact@v4
+        with:
+          name: box_release
+          path: ./
 
       - name: Upload to GitHub Pre-release
-        if: steps.check_ci.outputs.should_upload == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=${{ steps.get_version.outputs.version }}
-          COMMIT_HASH=${{ steps.get_commit_hash.outputs.commit_hash }}
-          FILE=$(find . -name "*.zip")
-          gh release create "pre-${VERSION}-${COMMIT_HASH}" "$FILE" \
+          VERSION="${{ needs.build.outputs.version }}"
+          FILE=$(find . -name "box_for_root-*.zip")
+          gh release create "pre-${VERSION}" "$FILE" \
             --prerelease \
-            --title "Pre-release ${VERSION} (${COMMIT_HASH})" \
-            --notes "pre-release build from commit ${COMMIT_HASH}"
+            --title "Pre-release ${VERSION}" \
+            --notes "Pre-release build from commit $(git log -1 --pretty=%h)"
 
       - name: Upload to Telegram
-        if: steps.check_ci.outputs.should_upload == 'true'
         env:
           CHAT_ID: ${{ secrets.CHAT_ID }}
           MESSAGE_THREAD_ID: ${{ secrets.MESSAGE_THREAD_ID }}
@@ -107,11 +96,9 @@ jobs:
           API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
-          if [ ! -z "${{ secrets.BOT_TOKEN }}" ]; then
-            export VERSION=${{ steps.get_version.outputs.version }}
-            export COMMIT_HASH=${{ steps.get_commit_hash.outputs.commit_hash }}
-            export COMMIT=$(git log --oneline -n 5 --no-decorate | sed 's/^[0-9a-f]* //' | sed 's/^/— /')
-            FILE=$(find . -name "*.zip")
+          if [ -n "${{ secrets.BOT_TOKEN }}" ]; then
+            export VERSION="${{ needs.build.outputs.version }}"
+            FILE=$(find . -name "box_for_root-*.zip")
             pip3 install telethon==1.31.1
-            python3 $GITHUB_WORKSPACE/.github/boxrootbot.py "$FILE"
+            python3 .github/boxrootbot.py "$FILE"
           fi
