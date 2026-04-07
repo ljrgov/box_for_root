@@ -1,0 +1,123 @@
+#!/system/bin/sh
+
+# 检查模块是否已禁用
+if [ -f "/data/adb/modules/box_for_root/disable" ]; then
+    exit 0
+fi
+
+events=$1
+# monitor_dir=$2
+# monitor_file=$3
+
+export PATH="/data/adb/magisk:/data/adb/ksu/bin:/data/adb/ap/bin:$PATH:/system/bin"
+
+# ex: 7.1.1
+buildVersion=$(getprop ro.build.version.release)
+minBuildVersion="11"
+IPV="iptables" # Default
+IP6V="ip6tables" # Default
+# ex: 7.1.1 -> 7
+buildVersionMajor=${buildVersion%%.*}
+if [ "$buildVersionMajor" -ge "$minBuildVersion" ]; then
+  IPV="iptables -w 100"
+  IP6V="ip6tables -w 100"
+fi
+
+iptables="${IPV}"
+ip6tables="${IP6V}"
+logs="/data/adb/box/run"
+log_file="${logs}/net.log"
+lock_dir="${logs}/locks/net_inotify.lock"
+
+log_info() {
+  mkdir -p "${logs}" >/dev/null 2>&1 || true
+  echo "[$(date '+%F %T')] [Info]: $*" >> "${log_file}" 2>&1
+}
+
+log_warn() {
+  mkdir -p "${logs}" >/dev/null 2>&1 || true
+  echo "[$(date '+%F %T')] [Warn]: $*" >> "${log_file}" 2>&1
+}
+
+log_reset() {
+  mkdir -p "${logs}" >/dev/null 2>&1 || true
+  : > "${log_file}" 2>&1 || true
+}
+
+with_lock_or_skip() {
+  mkdir -p "${logs}" "${logs}/locks" >/dev/null 2>&1 || true
+  if ! mkdir "${lock_dir}" >/dev/null 2>&1; then
+    return 1
+  fi
+  trap "rmdir \"${lock_dir}\" >/dev/null 2>&1 || true" EXIT INT TERM
+  return 0
+}
+
+chain_exists() {
+  local ipt_cmd="$1"
+  local table_name="$2"
+  local chain_name="$3"
+  ${ipt_cmd} -t "${table_name}" -L "${chain_name}" >/dev/null 2>&1
+}
+
+ensure_chain_and_flush() {
+  local ipt_cmd="$1"
+  local table_name="$2"
+  local chain_name="$3"
+  ${ipt_cmd} -t "${table_name}" -N "${chain_name}" >/dev/null 2>&1 || true
+  ${ipt_cmd} -t "${table_name}" -F "${chain_name}" >/dev/null 2>&1 || true
+}
+
+ensure_rule_append() {
+  local ipt_cmd="$1"
+  local table_name="$2"
+  local chain_name="$3"
+  shift 3
+  if ${ipt_cmd} -t "${table_name}" -C "${chain_name}" "$@" >/dev/null 2>&1; then
+    return 0
+  fi
+  ${ipt_cmd} -t "${table_name}" -A "${chain_name}" "$@" >/dev/null 2>&1
+}
+
+rules_add() {
+  mkdir -p "${logs}" >/dev/null 2>&1 || true
+
+  ensure_chain_and_flush "${iptables}" mangle LOCAL_IP_V4
+  ensure_chain_and_flush "${iptables}" nat LOCAL_IP_V4
+
+  ip -4 a | busybox awk '/inet/ {print $2}' | busybox sort -u | busybox grep -vE "^127\\.0\\.0\\.1" | while read -r local_ipv4 ; do
+    rv1=1
+    rv2=1
+    ensure_rule_append "${iptables}" mangle LOCAL_IP_V4 -d "${local_ipv4}" -j ACCEPT
+    rv1=$?
+    ensure_rule_append "${iptables}" nat LOCAL_IP_V4 -d "${local_ipv4}" -j ACCEPT
+    rv2=$?
+    if [ "${rv1}" = "0" ] || [ "${rv2}" = "0" ]; then
+      log_info "本地IP ${local_ipv4}，防环回规则已更新"
+    else
+      log_warn "本地IP ${local_ipv4}，防环回规则更新失败"
+    fi
+  done
+
+  ensure_chain_and_flush "${ip6tables}" mangle LOCAL_IP_V6
+  ip -6 a | busybox awk '/inet6/ {print $2}' | busybox sort -u | busybox grep -vE "^fe80|^::1|^fd00" | while read -r local_ipv6 ; do
+    rv6=1
+    ensure_rule_append "${ip6tables}" mangle LOCAL_IP_V6 -d "${local_ipv6}" -j ACCEPT
+    rv6=$?
+    if [ "${rv6}" = "0" ]; then
+      log_info "本地IP ${local_ipv6}，防环回规则已更新"
+    else
+      log_warn "本地IP ${local_ipv6}，防环回规则更新失败"
+    fi
+  done
+}
+
+if [ "$events" = "w" ]; then
+  # 只有 box.pid 存在时才执行原有规则
+  if [ -f "/data/adb/box/run/box.pid" ]; then
+    if with_lock_or_skip; then
+      log_reset
+      rules_add
+    fi
+  fi
+fi
