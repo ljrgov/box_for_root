@@ -16,28 +16,38 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      commit: ${{ steps.get_version.outputs.commit }}
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Update Module.prop
-        run: |
-          sed -i "s/$(grep -oP 'version=\K[^ ]+' module.prop)/$(cat module.prop | grep 'version=' | awk -F '=' '{print $2}')($(git log --oneline -n 1 | awk '{print $1}'))/g" module.prop
-          sed -i "s/versionCode=.*/versionCode=$(date +%Y%m%d)/g" module.prop
-
-      - name: Get Version
+      - name: Update module.prop
         id: get_version
         run: |
-          echo "version=$(grep -oP 'version=\K[^ ]+' module.prop)" >> "$GITHUB_OUTPUT"
+          VERSION=$(grep -oP 'version=\K[^ ]+' module.prop)
+          COMMIT=$(git log --oneline -n 1 | awk '{print $1}')
+          sed -i "s/^version=.*/version=${VERSION}(${COMMIT})/" module.prop
+          sed -i "s/^versionCode=.*/versionCode=$(date +%Y%m%d)/" module.prop
+          echo "version=${VERSION}(${COMMIT})" >> "$GITHUB_OUTPUT"
+          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
 
       - name: Generate Asset
         run: |
-          sudo mkdir -p /box_for_root
-          sudo cp -r --parents $(find ./ -type f ! -path './.git/*' ! -name 'CHANGELOG.md' ! -name 'update.json' ! -name 'build.sh' ! -path './.github/*' ! -path './apks/*')  /box_for_root/
+          mkdir -p /box_for_root
+          find ./ -type f \
+            ! -path './.git/*' \
+            ! -name 'CHANGELOG.md' \
+            ! -name 'update.json' \
+            ! -name 'build.sh' \
+            ! -path './.github/*' \
+            ! -path './apks/*' \
+            -print0 | xargs -0 -I{} cp --parents {} /box_for_root/
 
-      - name: Upload Debug Asset => (box_for_root_${{ steps.get_version.outputs.version }})
+      - name: Upload Debug Artifact
         uses: actions/upload-artifact@v4
         with:
           name: "box_for_root_${{ steps.get_version.outputs.version }}"
@@ -45,8 +55,7 @@ jobs:
 
   upload:
     runs-on: ubuntu-latest
-    needs:
-      - build
+    needs: build
 
     steps:
       - uses: actions/checkout@v4
@@ -64,38 +73,54 @@ jobs:
             echo "should_upload=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run build
+      - name: Download artifact
+        if: steps.check_ci.outputs.should_upload == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: "box_for_root_${{ needs.build.outputs.version }}"
+          path: /box_for_root/
+
+      - name: Package zip
         if: steps.check_ci.outputs.should_upload == 'true'
         run: |
-          sed -i "s/$(grep -oP 'version=\K[^ ]+' module.prop)/$(cat module.prop | grep 'version=' | awk -F '=' '{print $2}')($(git log --oneline -n 1 | awk '{print $1}'))/g" module.prop
-          zip -r -o -X -ll box_for_root-$(cat module.prop | grep 'version=' | awk -F '=' '{print $2}').zip ./ \
-            -x '.git/*' -x 'CHANGELOG.md' -x 'update.json' -x 'build.sh' -x '.github/*' -x 'apks/*'
+          VERSION="${{ needs.build.outputs.version }}"
+          cd /box_for_root
+          zip -r -o -X -ll "$GITHUB_WORKSPACE/box_for_root-${VERSION}.zip" ./
 
       - name: Upload to GitHub Pre-release
         if: steps.check_ci.outputs.should_upload == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(cat module.prop | grep 'version=' | awk -F '=' '{print $2}')
-          FILE=$(find . -name "*.zip")
-          gh release create "pre-${VERSION}" "$FILE" \
+          VERSION="${{ needs.build.outputs.version }}"
+          COMMIT="${{ needs.build.outputs.commit }}"
+          TAG="pre-${VERSION}"
+          FILE=$(find "$GITHUB_WORKSPACE" -maxdepth 1 -name "*.zip")
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          gh release create "$TAG" "$FILE" \
             --prerelease \
             --title "Pre-release ${VERSION}" \
-            --notes "pre-release build from commit $(git log -1 --pretty=%h)"
+            --notes "pre-release build from commit ${COMMIT}"
+
+      - name: Setup Python
+        if: steps.check_ci.outputs.should_upload == 'true' && secrets.BOT_TOKEN != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          cache: 'pip'
 
       - name: Upload to Telegram
-        if: steps.check_ci.outputs.should_upload == 'true'
+        if: steps.check_ci.outputs.should_upload == 'true' && secrets.BOT_TOKEN != ''
         env:
           CHAT_ID: ${{ secrets.CHAT_ID }}
           MESSAGE_THREAD_ID: ${{ secrets.MESSAGE_THREAD_ID }}
           API_ID: ${{ secrets.API_ID }}
           API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
-          if [ ! -z "${{ secrets.BOT_TOKEN }}" ]; then
-            export VERSION=$(cat module.prop | grep 'version=' | awk -F '=' '{print $2}')
-            export COMMIT=$(git log --oneline -n 5 --no-decorate | sed 's/^[0-9a-f]* //' | sed 's/^/— /')
-            FILE=$(find . -name "*.zip")
-            pip3 install telethon==1.31.1
-            python3 $GITHUB_WORKSPACE/.github/boxrootbot.py "$FILE"
-          fi
+          pip install telethon==1.31.1
+          COMMIT_LOG=$(git log --oneline -n 5 --no-decorate | sed 's/^[0-9a-f]* //' | sed 's/^/— /')
+          export COMMIT="$COMMIT_LOG"
+          FILE=$(find "$GITHUB_WORKSPACE" -maxdepth 1 -name "*.zip")
+          python3 "$GITHUB_WORKSPACE/.github/boxrootbot.py" "$FILE"
