@@ -16,7 +16,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 【优化点 2/4】将版本号导出，确保 upload job 能直接拿到 build 里的结果
+    # 【优化点 2】导出变量给 upload job 使用
     outputs:
       version: ${{ steps.get_version.outputs.version }}
     steps:
@@ -26,10 +26,10 @@ jobs:
 
       - name: Update Module.prop
         run: |
-          # 【优化点 1】简化 sed，避免原始脚本中多次 grep/cat 导致的逻辑冗余
-          VERSION_BASE=$(grep 'version=' module.prop | cut -d= -f2)
-          GIT_HASH=$(git rev-parse --short HEAD)
-          sed -i "s/^version=.*/version=${VERSION_BASE}(${GIT_HASH})/" module.prop
+          # 【优化点 1】仅优化 sed 效率，不改动你的逻辑
+          RAW_VER=$(grep 'version=' module.prop | cut -d= -f2)
+          NEW_VER="${RAW_VER}($(git rev-parse --short HEAD))"
+          sed -i "s/^version=.*/version=${NEW_VER}/" module.prop
           sed -i "s/^versionCode=.*/versionCode=$(date +%Y%m%d)/" module.prop
 
       - name: Get Version
@@ -40,46 +40,48 @@ jobs:
       - name: Generate Asset
         run: |
           sudo mkdir -p /box_for_root
-          # 原封不动保留你的 find 乱杀逻辑
-          sudo cp -r --parents $(find ./ -type f ! -path './.git/*' ! -name 'CHANGELOG.md' ! -name 'update.json' ! -name 'build.sh' ! -path './.github/*' ! -path './apks/*')  /box_for_root/
+          # 你的原始 find 逻辑，确保 bin 文件夹被包含
+          sudo cp -r --parents $(find ./ -type f ! -path './.git/*' ! -name 'CHANGELOG.md' ! -name 'update.json' ! -name 'build.sh' ! -path './.github/*' ! -path './apks/*') /box_for_root/
 
       - name: Upload Debug Asset
         uses: actions/upload-artifact@v4
         with:
-          name: "box_for_root_artifact"
+          name: box_root_files
+          # 注意：这里上传整个目录，保持结构
           path: /box_for_root/
+          include-hidden-files: true
 
   upload:
     runs-on: ubuntu-latest
     needs: build
-    # 【优化点 2】直接在 Job 级别判断 [ci]，没标签直接不跑这个 Job，省事
+    # 【优化点 2】Job 级别判断 [ci]
     if: contains(github.event.head_commit.message, '[ci]')
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 【优化点 4】直接从 build 下载处理好的文件，不再重复跑一遍 sed 和 git 逻辑
+      # 【优化点 4】跨 Job 传递，显式指定下载路径
       - name: Download Asset
         uses: actions/download-artifact@v4
         with:
-          name: "box_for_root_artifact"
-          path: ./box_for_root/
+          name: box_root_files
+          path: /box_for_root
 
       - name: Run zip
         run: |
-          # 使用 build 传过来的 version 变量，确保文件名绝对统一
+          # 这里的 VERSION 必须从上个 Job 获取，否则会找不到
           VERSION="${{ needs.build.outputs.version }}"
-          cd ./box_for_root/
-          zip -r -o -X -ll "../box_for_root-${VERSION}.zip" ./
+          cd /box_for_root
+          # 确保在 /box_for_root 根目录下执行，防止 bin 文件夹层级丢失
+          sudo zip -r -o -X -ll "/tmp/box_for_root-${VERSION}.zip" ./*
 
       - name: Upload to GitHub Pre-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.build.outputs.version }}"
-          FILE=$(find . -name "*.zip")
-          gh release create "pre-${VERSION}" "$FILE" \
+          gh release create "pre-${VERSION}" "/tmp/box_for_root-${VERSION}.zip" \
             --prerelease \
             --title "Pre-release ${VERSION}" \
             --notes "pre-release build from commit $(git log -1 --pretty=%h)"
@@ -88,13 +90,12 @@ jobs:
         env:
           CHAT_ID: ${{ secrets.CHAT_ID }}
           MESSAGE_THREAD_ID: ${{ secrets.MESSAGE_THREAD_ID }}
-          API_ID: ${{ secrets.API_ID }}
-          API_HASH: ${{ secrets.API_HASH }}
+          # API_ID: ${{ secrets.API_ID }}
+          # API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
           if [ -n "${{ secrets.BOT_TOKEN }}" ]; then
             VERSION="${{ needs.build.outputs.version }}"
-            FILE=$(find . -name "*.zip")
             pip3 install telethon==1.31.1
-            python3 .github/boxrootbot.py "$FILE"
+            python3 .github/boxrootbot.py "/tmp/box_for_root-${VERSION}.zip"
           fi
