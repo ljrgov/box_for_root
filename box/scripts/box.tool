@@ -68,8 +68,8 @@ upfile() {
     log_url="$(mask_url "${update_url}")"
   fi
   log Info "开始下载: ${log_url}"
-  log Debug "保存到: ${file}"
-  log Debug "使用 User-Agent: ${current_ua}"
+  # log Debug "保存到: ${file}"
+  log Info "使用 User-Agent: ${current_ua}"
 
   if which curl >/dev/null; then
     http_code=$(curl -L -s --insecure --http1.1 --compressed --user-agent "${current_ua}" -o "${file}" -w "%{http_code}" "${update_url}")
@@ -419,15 +419,12 @@ update_mihomo_providers() {
     return 1
   fi
 
-  log Debug "开始更新 proxy-providers 配置项 (共 ${file_count} 个订阅)..."
+  # log Debug "开始更新 proxy-providers 配置项 (共 ${file_count} 个订阅)..."
   local config_dir="$(dirname "${mihomo_config}")"  
   
-  # 检测是否存在锚点 &p
+  # 检测是否存在锚点 &p (用于 Providers 内部引用模板)
   local has_anchor=false
   local anchor_name=""
-
-  # 在 proxy-providers: 及其后 10 行内查找锚点引用 (<<: *name)
-  # 使用 sed 提取 * 后面的字母/数字
   anchor_name=$(grep -A 10 "proxy-providers:" "${mihomo_config}" | grep "<<: \*" | head -n1 | sed 's/.*\*//;s/ //g')
 
   if [ -n "$anchor_name" ]; then
@@ -438,10 +435,10 @@ update_mihomo_providers() {
   local temp_providers="${mihomo_config}.providers.tmp"
   local temp_use_list="${mihomo_config}.use.tmp"
   
-  # 初始化临时区块
+  # 1. 【初始化临时区块】
   echo "proxy-providers:" > "${temp_providers}"
-  echo "a: &a" > "${temp_use_list}"
-  echo "  use:" >> "${temp_use_list}"
+  # 这里的 use: 会作为内容插件注入到匹配到的每一个锚点下方
+  echo "  use:" > "${temp_use_list}"
   
   # 2. 【核心循环】支持多订阅
   for i in $(seq 0 $((file_count - 1))); do
@@ -458,8 +455,6 @@ update_mihomo_providers() {
     local escaped_url="$(echo "${provider_url}" | busybox sed 's/\\/\\\\/g; s/\"/\\"/g')"
     local relative_path="./proxy-providers/${file_name}"
 
-    log Debug "正在处理第 $((i+1))/${file_count} 个: ${provider_name}"
-    
     # 写入 provider 配置
     if [ "$has_anchor" = true ]; then
       cat >> "${temp_providers}" <<EOF
@@ -489,6 +484,7 @@ EOF
     header:
       User-Agent:
         - "${subs_ua}"
+        - "ClashMetaForAndroid/2.11.17.Meta"        
 
 EOF
     fi
@@ -497,26 +493,60 @@ EOF
     echo "    - ${provider_name}" >> "${temp_use_list}"
   done
 
-  # 3. AWK 精准区块替换
+  # 3. 【核心 AWK】避让机制的动态替换
   local temp_output="${mihomo_config}.output.tmp"
   awk -v new_p="${temp_providers}" -v new_u="${temp_use_list}" '
-    BEGIN { in_p=0; p_done=0; in_u=0; u_done=0 }
-    /^a:[[:space:]]*\&a/ { 
-      in_u=1; if(!u_done){ while((getline l < new_u)>0) print l; close(new_u); u_done=1 }
-      next 
+    BEGIN { 
+      in_p=0; p_done=0; 
+      in_anchor=0; in_use_list=0 
     }
+
+    # A. 替换顶级 proxy-providers 区块
     /^proxy-providers:[[:space:]]*/ { 
-      in_p=1; if(!p_done){ while((getline l < new_p)>0) print l; close(new_p); p_done=1 }
+      in_p=1; 
+      if(!p_done){ while((getline l < new_p)>0) print l; close(new_p); p_done=1 }
       next 
     }
-    (in_u || in_p) && /^[A-Za-z0-9_-]+:/ { in_u=0; in_p=0; print; next }
-    !(in_u || in_p) { print }
+
+    # B. 匹配锚点行 (如 All: &All)，但通过排除花括号 {} 避开规则集锚点
+    /^[A-Za-z0-9_-]+:[[:space:]]*&[A-Za-z0-9_-]+/ {
+      # 排除掉包含 behavior, format 或花括号的规则定义行
+      if ($0 ~ /\{/ || $0 ~ /behavior/ || $0 ~ /format/) {
+        in_anchor=0; print $0; next
+      }
+      in_anchor=1; in_use_list=0;
+      print $0;
+      next;
+    }
+
+    # C. 在锚点区块内寻找 use: 并注入新列表
+    in_anchor && /^[[:space:]]+use:[[:space:]]*/ {
+      while((getline l < new_u)>0) print l; 
+      close(new_u);
+      in_use_list=1; 
+      next;
+    }
+
+    # D. 状态截断：遇到任何顶格的 Key，说明当前区块结束
+    /^[A-Za-z0-9_-]+:/ && !/&/ && !/^proxy-providers:/ {
+      in_anchor=0; in_p=0; in_use_list=0;
+      print $0;
+      next;
+    }
+    # E. 过滤逻辑
+    in_p { next }
+    in_use_list && /^[[:space:]]+-/ { next } 
+    in_use_list && !/^[[:space:]]+-/ { in_use_list=0; } 
+
+    # F. 默认输出
+    { if (!in_use_list) print $0 }
   ' "${mihomo_config}" > "${temp_output}"
   
+  # 4. 覆盖原文件
   mv "${temp_output}" "${mihomo_config}"
   rm -f "${temp_providers}" "${temp_use_list}"
   
-  log Debug "所有订阅 (${file_count} 个) 已成功同步至配置。"
+  # log Debug "${file_count}个订阅已同步至配置。"
   return 0
 }
 
@@ -566,7 +596,7 @@ upsubs() {
         local file_name="${name_provide_mihomo_config[$i]}"
         local provider_file="${mihomo_provide_path}/${file_name}"
         
-        log Info "--> 正在处理订阅 #${i}: ${file_name}"
+        log Debug "--> 正在处理订阅 #${i}: ${file_name}"
 
         if [ "${renew}" = "true" ] && [ "$i" -eq 0 ]; then
           log Info "检测到 renew=true, 仅使用第一个订阅链接更新"
@@ -585,18 +615,18 @@ upsubs() {
         fi
         
         if LOG_MASK_URL=mask upfile "${provider_file}" "${url}" "${subs_ua}"; then
-          log Debug "文件大小: $(wc -c < "${provider_file}" 2>/dev/null || echo "未知") 字节"
-          log Debug "文件路径: ${provider_file}"
+          log Info "文件大小: $(wc -c < "${provider_file}" 2>/dev/null || echo "未知") 字节"
+          log Info "文件路径: ${provider_file}"
           
           local decoded_content
           decoded_content=$(base64 -d "${provider_file}" 2>/dev/null)
 
           if [ $? -eq 0 ] && echo "${decoded_content}" | grep -qE "vless://|vmess://|ss://|hysteria://|hysteria2://|anytls://|trojan://"; then
-            log Info "检测到 Base64 编码订阅, 正在解码..."
+            log Debug "检测到 Base64 编码订阅, 正在解码..."
             echo "${decoded_content}" > "${provider_file}"
             local proxy_count=$(echo "${decoded_content}" | grep -cE "vless://|vmess://|ss://|hysteria://|hysteria2://|anytls://|trojan://")
-            log Debug "提取到 ${proxy_count} 个代理节点"
-            log Info "订阅 #${i} (Base64解码/原始链接) 已保存"
+            log Info "提取到 ${proxy_count} 个代理节点"
+            log Debug "订阅 #${i} (Base64解码/原始链接) 已保存"
             success_count=$((success_count + 1))
           elif ${yq} 'has("proxies")' "${provider_file}" 2>/dev/null; then
             if [ "${custom_rules_subs}" = "true" ] && [ "$rules_extracted" = "false" ]; then
@@ -609,16 +639,16 @@ upsubs() {
               fi
             fi
 
-            log Debug "标准订阅格式, 正在提取 proxies 并覆盖原文件..."
+            # log Debug "标准订阅格式, 正在提取 proxies 并覆盖原文件..."
             local temp_proxies_file
             temp_proxies_file=$(mktemp)
             
             # 提取 proxies 数组并验证
-            log Debug "尝试提取 proxies 字段..."     
+            # log Debug "尝试提取 proxies 字段..."     
             if ${yq} '.proxies' "${provider_file}" > "${temp_proxies_file}" 2>/dev/null; then
               if [ -s "${temp_proxies_file}" ]; then
                 local proxy_count=$(${yq} 'length' "${temp_proxies_file}" 2>/dev/null || echo "0")
-                log Debug "提取到 ${proxy_count} 个代理节点"
+                log Info "提取到 ${proxy_count} 个代理节点"
                 ${yq} -i '{"proxies": .}' "${temp_proxies_file}"
                 mv "${temp_proxies_file}" "${provider_file}"
                 log Info "订阅 #${i} (标准格式) 已处理并保存"
@@ -636,8 +666,8 @@ upsubs() {
 
           elif ${yq} '.. | select(tag == "!!str")' "${provider_file}" 2>/dev/null | grep -qE "vless://|vmess://|ss://|hysteria://|hysteria2://|anytls://|trojan://"; then
             local proxy_count=$(${yq} '.. | select(tag == "!!str")' "${provider_file}" 2>/dev/null | grep -cE "vless://|vmess://|ss://|hysteria://|hysteria2://|anytls://|trojan://")
-            log Debug "提取到 ${proxy_count} 个代理节点"
-            log Info "订阅 #${i} (原始链接) 已保存"
+            log Info "提取到 ${proxy_count} 个代理节点"
+            log Debug "订阅 #${i} (原始链接) 已保存"
             success_count=$((success_count + 1))
           else
             log Error "订阅 #${i} (${file_name}) 格式无法识别或内容为空, 已删除"
@@ -654,14 +684,14 @@ upsubs() {
       
       if [ "${renew}" != "true" ] && [ "${success_count}" -gt 0 ]; then
         if [ "${auto_modify_config}" = "true" ]; then
-          log Info "正在更新 ${name_mihomo_config} 的 proxy-providers 配置..."
+          log Debug "同步订阅至配置: ${name_mihomo_config} ..."
           if update_mihomo_providers; then
-            log Info "proxy-providers 配置更新成功"
+            log Info "订阅更新同步成功"
           else
-            log Warning "proxy-providers 配置更新失败，请手动检查配置文件"
+            log Warning "proxy-providers 更新同步失败，请手动检查配置文件"
           fi
         else
-          log Info "auto_modify_config 未启用，跳过更新 proxy-providers 配置"
+          log Info "auto_modify_config 未启用，跳过更新同步 proxy-providers 字段"
         fi
       fi
       

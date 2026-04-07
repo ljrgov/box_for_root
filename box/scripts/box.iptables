@@ -1415,7 +1415,7 @@ if [[ "${network_mode}" == @(redirect|mixed|tproxy|enhance) ]]; then
         ;;
       esac
       runtime_save
-      [ $1 = "renew" ] && log Debug "重启 iptables 透明代理规则完成。"
+      [ $1 = "renew" ] && log Info "重启 iptables 透明代理规则完成。"
       bin_alive && log Info "${bin_name} 已连接。"
       ;;
     disable)
