@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths-ignore:
-      - "docs/**"
+      - "apks/**"
       - "README.md"
       - "CHANGELOG.md"
     branches:
@@ -26,25 +26,19 @@ jobs:
       - name: Update Module Metadata
         id: get_version
         run: |
-          # 提取原始版本号并加上 commit hash
           RAW_VER=$(grep 'version=' module.prop | cut -d'=' -f2)
           SHORT_SHA=$(git rev-parse --short HEAD)
-          NEW_VER="${RAW_VER}(${SHORT_SHA})"
-          
-          # 修改配置文件中的版本信息
+          NEW_VER="${RAW_VER}-${SHORT_SHA}"
+
           sed -i "s/^version=.*/version=${NEW_VER}/" module.prop
-          sed -i "s/^versionCode=.*/versionCode=$(date +%Y%m%d)/" module.prop
-          
+          sed -i "s/^versionCode=.*/versionCode=$(date +%s)/" module.prop
+
           echo "version=${NEW_VER}" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare Debug Asset (Scheme B)
+      - name: Prepare Debug Asset
         run: |
-          # 创建输出目录
           mkdir -p ./box_debug_out
-          
-          # 使用 rsync 安全地同步文件，排除目标目录本身和无关 Git/文档目录
-          # 这样可以彻底避免 "cannot copy a directory into itself" 的报错
-          rsync -av ./ ./box_debug_out/ \
+          rsync -aL ./ ./box_debug_out/ \
             --exclude='box_debug_out' \
             --exclude='.git' \
             --exclude='.github' \
@@ -89,28 +83,23 @@ jobs:
         if: steps.check_ci.outputs.should_upload == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Telegram 相关密钥映射
-          CHAT_ID: "-1003729279105"
-          MESSAGE_THREAD_ID: "3729279105"
+          CHAT_ID: ${{ vars.CHAT_ID }}
+          MESSAGE_THREAD_ID: ${{ vars.MESSAGE_THREAD_ID }}
           API_ID: ${{ secrets.API_ID }}
           API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           VERSION: ${{ needs.build.outputs.version }}
         run: |
-          # 进入下载好的目录进行 ZIP 打包
           cd ./release_temp
           ZIP_NAME="box_for_root-${{ needs.build.outputs.version }}.zip"
           zip -r "../$ZIP_NAME" ./*
           cd ..
-          
-          # 1. 创建 GitHub Release (Pre-release)
+
           gh release create "pre-${{ needs.build.outputs.version }}" "$ZIP_NAME" \
             --prerelease \
             --title "Pre-release ${{ needs.build.outputs.version }}" \
             --notes "Build from commit $(git rev-parse --short HEAD)"
-            
-          # 2. 准备 Telegram 更新日志并上传
-          # 获取最近 5 条 Commit
+
           export COMMIT=$(git log --oneline -n 5 --no-decorate | sed 's/^[0-9a-f]* //' | sed 's/^/— /')
-          pip3 install telethon==1.31.1
+          pip3 install -q telethon==1.31.1
           python3 .github/boxrootbot.py "$ZIP_NAME"
