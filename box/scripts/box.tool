@@ -484,7 +484,7 @@ EOF
     header:
       User-Agent:
         - "${subs_ua}"
-        - "ClashMetaForAndroid/2.11.17.Meta"        
+        - "${subs1_ua}"        
 
 EOF
     fi
