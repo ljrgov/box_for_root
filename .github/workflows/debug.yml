@@ -16,7 +16,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 将版本号导出给其他 Job 使用
+    # 【优化点 2/4】将版本号导出，确保 upload job 能直接拿到 build 里的结果
     outputs:
       version: ${{ steps.get_version.outputs.version }}
     steps:
@@ -26,11 +26,10 @@ jobs:
 
       - name: Update Module.prop
         run: |
-          # 简化 sed 逻辑，避免多次 grep
-          CUR_VER=$(grep 'version=' module.prop | cut -d= -f2)
+          # 【优化点 1】简化 sed，避免原始脚本中多次 grep/cat 导致的逻辑冗余
+          VERSION_BASE=$(grep 'version=' module.prop | cut -d= -f2)
           GIT_HASH=$(git rev-parse --short HEAD)
-          NEW_VER="${CUR_VER}(${GIT_HASH})"
-          sed -i "s/^version=.*/version=${NEW_VER}/" module.prop
+          sed -i "s/^version=.*/version=${VERSION_BASE}(${GIT_HASH})/" module.prop
           sed -i "s/^versionCode=.*/versionCode=$(date +%Y%m%d)/" module.prop
 
       - name: Get Version
@@ -40,53 +39,50 @@ jobs:
 
       - name: Generate Asset
         run: |
-          mkdir -p ./box_for_root
-          # 使用 rsync 或排除模式拷贝，避免 sudo 和复杂的 find 逻辑
-          cp -r ./ ./box_for_root/
-          rm -rf ./box_for_root/.git ./box_for_root/.github
-          # 删除不需要打包进模块的文件
-          cd ./box_for_root && rm -f CHANGELOG.md update.json build.sh
-          rm -rf apks/
+          sudo mkdir -p /box_for_root
+          # 原封不动保留你的 find 乱杀逻辑
+          sudo cp -r --parents $(find ./ -type f ! -path './.git/*' ! -name 'CHANGELOG.md' ! -name 'update.json' ! -name 'build.sh' ! -path './.github/*' ! -path './apks/*')  /box_for_root/
 
-      - name: Zip for Release
-        # 提前在 build 阶段打包，确保 upload 拿到的就是成品
-        run: |
-          VERSION="${{ steps.get_version.outputs.version }}"
-          zip -r -o -X -ll "../box_for_root-${VERSION}.zip" ./*
-          mv "../box_for_root-${VERSION}.zip" ../
-
-      - name: Upload Debug Artifact
+      - name: Upload Debug Asset
         uses: actions/upload-artifact@v4
         with:
-          name: box_release
-          path: box_for_root-*.zip
+          name: "box_for_root_artifact"
+          path: /box_for_root/
 
   upload:
     runs-on: ubuntu-latest
     needs: build
-    # 只有 commit message 包含 [ci] 才会执行分发逻辑
+    # 【优化点 2】直接在 Job 级别判断 [ci]，没标签直接不跑这个 Job，省事
     if: contains(github.event.head_commit.message, '[ci]')
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # 【优化点 4】直接从 build 下载处理好的文件，不再重复跑一遍 sed 和 git 逻辑
       - name: Download Asset
         uses: actions/download-artifact@v4
         with:
-          name: box_release
-          path: ./
+          name: "box_for_root_artifact"
+          path: ./box_for_root/
+
+      - name: Run zip
+        run: |
+          # 使用 build 传过来的 version 变量，确保文件名绝对统一
+          VERSION="${{ needs.build.outputs.version }}"
+          cd ./box_for_root/
+          zip -r -o -X -ll "../box_for_root-${VERSION}.zip" ./
 
       - name: Upload to GitHub Pre-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.build.outputs.version }}"
-          FILE=$(find . -name "box_for_root-*.zip")
+          FILE=$(find . -name "*.zip")
           gh release create "pre-${VERSION}" "$FILE" \
             --prerelease \
             --title "Pre-release ${VERSION}" \
-            --notes "Pre-release build from commit $(git log -1 --pretty=%h)"
+            --notes "pre-release build from commit $(git log -1 --pretty=%h)"
 
       - name: Upload to Telegram
         env:
@@ -97,8 +93,8 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
           if [ -n "${{ secrets.BOT_TOKEN }}" ]; then
-            export VERSION="${{ needs.build.outputs.version }}"
-            FILE=$(find . -name "box_for_root-*.zip")
+            VERSION="${{ needs.build.outputs.version }}"
+            FILE=$(find . -name "*.zip")
             pip3 install telethon==1.31.1
             python3 .github/boxrootbot.py "$FILE"
           fi
