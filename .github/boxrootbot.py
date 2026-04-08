@@ -23,7 +23,7 @@ MSG_TEMPLATE = """
 
 [仓库地址](https://github.com/ljrgov/box_for_root) | [Release 详情](https://github.com/ljrgov/box_for_root/releases)
 
-#module #root
+#安卓(root模块)
 """.strip()
 
 def check_environ():
@@ -46,16 +46,16 @@ def get_caption():
     date = os.environ.get("DATE", "")
     changelog = os.environ.get("CHANGELOG", "无更新日志")
 
-    is_debug = commit and commit != "none"
+    is_debug = commit and commit != "release"
 
     if is_debug:
-        # 调试版：显示版本 (哈希) + 后面加 #debug 标签
+        # 调试版：显示版本 +  Pre-release 标签
         version_display = f"{version} ({commit})"
-        tags = "#module #root #debug"
+        tags = "#安卓(root模块) #debug"
     else:
-        # 正式版：只显示版本
+        # 正式版：只显示版本 + Release 标签
         version_display = version
-        tags = "#module #root"
+        tags = "#安卓(root模块)"
 
     # 构建最终消息（手动拼接，防止模板 format 报错）
     msg = (
@@ -64,7 +64,7 @@ def get_caption():
         f"**日期:** {date}\n"
         f"**内容:** {changelog}\n\n"
         "[仓库地址](https://github.com/ljrgov/box_for_root) | "
-        "[Release 详情](https://github.com/ljrgov/box_for_root/releases)\n\n"
+        "[{commit} 详情](https://github.com/ljrgov/box_for_root/releases)\n\n"
         f"{tags}"
     ).strip()
 
