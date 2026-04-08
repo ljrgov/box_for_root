@@ -84,7 +84,6 @@ jobs:
             --notes "pre-release build from commit $(git log -1 --pretty=%h)"
 
       - name: Upload to Telegram
-        if: steps.check_ci.outputs.should_upload == 'true'
         env:
           CHAT_ID: ${{ secrets.CHAT_ID }}
           MESSAGE_THREAD_ID: ${{ secrets.MESSAGE_THREAD_ID }}
@@ -92,13 +91,12 @@ jobs:
           API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
-          if [ -n "${{ secrets.BOT_TOKEN }}" ]; then
-            # 1. 写入 GITHUB_ENV，确保 Python 能读取到
-            echo "VERSION=$(grep 'version=' module.prop | awk -F '=' '{print $2}')" >> $GITHUB_ENV
-            echo "COMMIT=$(git log --oneline -n 5 --no-decorate | sed 's/^[0-9a-f]* //' | sed 's/^/— /')" >> $GITHUB_ENV
-            
-            # 2. 安装依赖并运行（此时环境变量已生效）
-            FILE=$(find . -name "*.zip")
-            pip3 install telethon==1.31.1
-            python3 .github/boxrootbot.py "$FILE"
-          fi
+          # 提取数据
+          export VERSION=$(grep 'version=' module.prop | awk -F '=' '{print $2}')
+          export DATE=$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M")
+          # 自动构建时，内容取最后一条 commit message
+          export CHANGELOG=$(git log -1 --pretty=%B | head -n 1)
+          
+          FILE=$(find . -name "*.zip" | head -n 1)
+          pip3 install --quiet telethon==1.31.1
+          python3 .github/boxrootbot.py "$FILE"
