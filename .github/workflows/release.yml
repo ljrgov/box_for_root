@@ -92,7 +92,6 @@ jobs:
       - name: Upload to Telegram
         if: ${{ success() }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           MESSAGE_THREAD_ID: ${{ secrets.MESSAGE_THREAD_ID }}
           API_ID: ${{ secrets.API_ID }}
