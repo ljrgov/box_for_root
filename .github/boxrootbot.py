@@ -46,7 +46,7 @@ def get_caption():
     date = os.environ.get("DATE", "")
     changelog = os.environ.get("CHANGELOG", "无更新日志")
 
-    is_debug = commit and commit != "release"
+    is_debug = commit and commit != "Release"
 
     if is_debug:
         # 调试版：显示版本 +  Pre-release 标签
