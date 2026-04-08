@@ -15,7 +15,7 @@ DATE = os.environ.get("DATE", "")
 CHANGELOG = os.environ.get("CHANGELOG", "No changelog provided.")
 
 MSG_TEMPLATE = """
-📦 **安卓(root)模块**
+📦 **KernelSU/Magisk/Apatch模块**
 
 **版本:** {version}
 **日期:** {date}
@@ -23,7 +23,7 @@ MSG_TEMPLATE = """
 
 [仓库地址](https://github.com/ljrgov/box_for_root) | [Release 详情](https://github.com/ljrgov/box_for_root/releases)
 
-#moudle #root
+#moudle   #root
 """.strip()
 
 def check_environ():
@@ -51,15 +51,15 @@ def get_caption():
     if is_debug:
         # 调试版：
         version_display = f"{version}"
-        tags = "#moudle #root #debug"
+        tags = "#moudle   #root   #debug"
     else:
         # 正式版：
         version_display = version
-        tags = "#moudle #root"
+        tags = "#moudle   #root"
 
     # 构建最终消息（手动拼接，防止模板 format 报错）
     msg = (
-        "📦 **安卓(root)模块**\n\n"
+        "📦 **KernelSU/Magisk/Apatch模块**\n\n"
         f"**版本:** {version_display}\n"
         f"**日期:** {date}\n"
         f"**内容:** {changelog}\n\n"
