@@ -94,7 +94,7 @@ jobs:
           # 从模块文件提取版本号
           export VERSION=$(grep 'version=' module.prop | awk -F '=' '{print $2}')
           
-          # 自动获取当前提交的短哈希 (指纹)
+          # 自动获取当前提交的短哈希
           export COMMIT=$(git rev-parse --short HEAD)
           
           # 获取当前时间
