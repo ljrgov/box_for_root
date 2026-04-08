@@ -279,7 +279,7 @@ probe_capabilities() {
 
 log_context() {
   log Info "运行上下文: mode=${network_mode}, bin=${bin_name}, ipv6=${ipv6}, dns_hijack=${dns_hijack_mode}"
-  log Info "运行上下文: ports(tproxy=${tproxy_port}, redir=${redir_port}, mihomo_dns=${mihomo_dns_port})"
+  log Info "运行上下文: ports(tproxy=${tproxy_port}, redir=${redir_port}${mihomo_dns_port:+, mihomo_dns=${mihomo_dns_port}})"
   log Info "运行上下文: flags(proxy_tcp=${proxy_tcp}, proxy_udp=${proxy_udp}, dns_tcp=${dns_hijack_tcp}, dns_udp=${dns_hijack_udp}, quic=${quic})"
   log Info "运行上下文: cnip(total=${bypass_cn_ip}, v4=${bypass_cn_ip_v4}, v6=${bypass_cn_ip_v6})"
   log Info "运行上下文: mac_filter(enable=${mac_filter}, mode=${mac_mode}, macs_count=${#macs_list[@]})"

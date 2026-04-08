@@ -127,17 +127,22 @@ box_bin_alive() {
 box_run_crontab() {
   pkill -f "busybox crond" >/dev/null 2>&1
   busybox crontab -c "${box_run_state}" -r
-  echo "# root 的定时任务" > "${box_run_state}/root"
+  echo "# ---root 的定时任务--- #" > "${box_run_state}/root"
 
   if [ "${run_crontab}" = "true" ]; then
-    log Debug "crond 已启用"
     if [ "$update_subscription" = "true" ] || [ "$update_geo" = "true" ]; then
-      log Debug "定时任务间隔: ${interva_update}."
+      log Debug "crond 已启用: ${interva_update}"
       echo "${interva_update} ${scripts_dir}/box.tool geosub" >> "${box_run_state}/root"
-      log Info "${bin_name} geox 更新: ${update_geo}."
+      
+      # --- 非 sing-box 内核显示 geox 更新 ---
+      if [ "${bin_name}" != "sing-box" ]; then
+        log Debug "${bin_name} geox 更新: ${update_geo}"
+      fi  
       if [ "${bin_name}" = "mihomo" ]; then
-        log Info "${bin_name} 订阅更新: ${update_subscription}."
-      fi
+        log Debug "${bin_name} 订阅更新: ${update_subscription}"
+      elif [ "${bin_name}" = "sing-box" ] && [ "$update_subscription" = "true" ]; then
+        log Debug "${bin_name} 配置更新: true"
+      fi      
     fi
     cat "${box_dir}/crontab.cfg" >> "${box_run_state}/root"
     chmod 0644 "${box_run_state}/root"
@@ -163,7 +168,7 @@ box_permission() {
   if [[ "${box_user_group}" == @(root:net_admin|0:3005) && -f "${bin_path}" ]]; then
     # 设置内核目录权限和属主
     box_ownership
-    log Info "使用内核 ${bin_path}。"
+    log Info "使用内核 ${bin_path}"
   else
     if  [[ "${box_user_group}" != @(root:net_admin|0:3005) ]]; then
       log Error "不支持的用户组 [ \"${box_user_group}\" ]"
@@ -454,7 +459,7 @@ prepare_mihomo() {
 
 box_run_bin() {
   log Info "可用内核列表: [ ${bin_list[*]} ]"
-  log Info "选择内核: ${bin_name}，启动服务。"
+  log Info "选择内核: ${bin_name}，启动服务..."
   ulimit -SHn 1000000
 
   # 启动服务前刷新 box.tool 日志
@@ -722,20 +727,20 @@ set_description() {
 
   case "$status" in
     running)
-      desc="✅ 内核 ${bin_name}: 运行中 | 代理模式: ${proxy_mode} | 网络: ${network_mode} | IPv6状态: ${ipv6_info} | DNS模式: ${dns_mode}${wifi_match_str}"
+      desc="✅ 服务运行中 | 内核: ${bin_name} | 代理模式: ${proxy_mode} | 网络: ${network_mode} | IPv6状态: ${ipv6_info} | DNS模式: ${dns_mode}${wifi_match_str}"
       ;;
     stopped)
-      desc="❌ 内核 ${bin_name}: 已停止运行 | 代理已禁用"
+      desc="❌ 服务已停止 | 内核: ${bin_name} | 时间: ${current_time} | 代理已禁用"
       ;;
     idle)
-      desc="✨ box for root模块已加载，等待服务启动"
+      desc="✨ Box模块已加载，等待服务启动"
       ;;
     error)
       # 仅在出现配置错误时使用
       local current_time
       current_time=$(date "+%Y-%m-%d %H:%M:%S")
       [ -z "${error_msg}" ] && error_msg="配置错误"
-      desc="⚠️ 内核 ${bin_name}: ${error_msg} | 时间: ${current_time} | 详情见日志: ${box_run}/${bin_name}.log"
+      desc="⚠️ ${error_msg} | 时间: ${current_time} | 内核: ${bin_name} | 详情见日志: ${box_run}/${bin_name}.log"
       ;;
     *)
       desc="💤 Box状态未知"
@@ -809,7 +814,7 @@ start_box() {
   # 检查 bin_name 是否已定义
   case "${bin_name}" in
     mihomo|xray|sing-box|v2fly|hysteria)
-      log Info "启动服务"
+      log Info "Hi, 祝你美好的一天"
       ;;
     *)
       log Error "bin_name: [ ${bin_name} ] 未定义或未知"
