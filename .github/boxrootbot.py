@@ -96,11 +96,13 @@ async def main():
         print(caption[-1])
         print("---")
         print("[+] Sending")
+        # 以后如果开启了话题，填正确的MESSAGE_THREAD_ID，这里会自动生效
+        safe_thread = thread_id if thread_id and -2147483648 <= thread_id <= 2147483647 else None
         await bot.send_file(
-            entity=int(CHAT_ID_RAW),
+            entity=chat_id,
             file=files,
             caption=get_caption(),
-            reply_to=thread_id,
+            reply_to=safe_thread,
             parse_mode="markdown"
         )
         print("[+] Done!")
