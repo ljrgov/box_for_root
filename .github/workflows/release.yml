@@ -97,11 +97,25 @@ jobs:
           API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
-          # 使用手动输入的 inputs 变量
+          # 核心版本信息
           export VERSION="${{ github.event.inputs.tag }}"
+          
+          # 获取短哈希，作为脚本中缺失的 COMMIT
+          export COMMIT=$(git rev-parse --short HEAD || echo "none")
+          
+          # 处理日期
           export DATE=$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M")
+          
+          # 使用双引号包裹 CHANGELOG，防止多行文本破坏 Shell 脚本
           export CHANGELOG="${{ github.event.inputs.changelog }}"
           
+          # 查找文件
           FILE=$(find . -name "box_for_root-*.zip" | head -n 1)
+          
+          if [ -z "$FILE" ]; then
+            echo "[-] No zip file found!"
+            exit 1
+          fi
+
           pip3 install --quiet telethon==1.31.1
           python3 .github/boxrootbot.py "$FILE"
