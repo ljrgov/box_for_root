@@ -84,6 +84,8 @@ jobs:
             --notes "pre-release build from commit $(git log -1 --pretty=%h)"
 
       - name: Upload to Telegram (Debug Mode)
+        # 通过 [ci] 决定是否上传
+        if: steps.check_ci.outputs.should_upload == 'true'
         env:
           CHAT_ID: ${{ secrets.CHAT_ID }}
           MESSAGE_THREAD_ID: ${{ secrets.MESSAGE_THREAD_ID }}
