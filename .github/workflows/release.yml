@@ -90,32 +90,18 @@ jobs:
 
       # 7. 上传到 Telegram
       - name: Upload to Telegram
-        if: ${{ success() }}
         env:
           CHAT_ID: ${{ secrets.CHAT_ID }}
           MESSAGE_THREAD_ID: ${{ secrets.MESSAGE_THREAD_ID }}
           API_ID: ${{ secrets.API_ID }}
           API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          # 直接在 env 声明，GitHub 会自动把这些注入到系统环境变量
-          VERSION: ${{ github.event.inputs.tag }}
         run: |
-          # 获取最近的 commit 记录，并写入 $GITHUB_ENV 确保全局可见
-          echo "COMMIT<<EOF" >> $GITHUB_ENV
-          git log --oneline -n 10 --no-decorate | sed 's/^[0-9a-f]* //' | sed 's/^/— /' >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
+          # 使用手动输入的 inputs 变量
+          export VERSION="${{ github.event.inputs.tag }}"
+          export DATE=$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M")
+          export CHANGELOG="${{ github.event.inputs.changelog }}"
+          
+          FILE=$(find . -name "box_for_root-*.zip" | head -n 1)
           pip3 install --quiet telethon==1.31.1
-
-          # 查找构建出的压缩包
-          FILE=$(find . -maxdepth 1 -type f -name "box_for_root-*.zip" | head -n 1)
-          
-          if [ -z "$FILE" ]; then
-            echo "[-] Error: No ZIP file found in root directory!"
-            exit 1
-          fi
-
-          echo "[+] Found file: $FILE"
-          echo "[+] Using Version: $VERSION"
-          
           python3 .github/boxrootbot.py "$FILE"
