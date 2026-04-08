@@ -15,15 +15,15 @@ DATE = os.environ.get("DATE", "")
 CHANGELOG = os.environ.get("CHANGELOG", "No changelog provided.")
 
 MSG_TEMPLATE = """
-📦 **box for root模块**
+📦 **安卓(root)模块**
 
-**版本:** {version} ({commit})
+**版本:** {version}
 **日期:** {date}
 **内容:** {changelog}
 
 [仓库地址](https://github.com/ljrgov/box_for_root) | [Release 详情](https://github.com/ljrgov/box_for_root/releases)
 
-#安卓(root模块)
+#moudle #root
 """.strip()
 
 def check_environ():
@@ -46,25 +46,25 @@ def get_caption():
     date = os.environ.get("DATE", "")
     changelog = os.environ.get("CHANGELOG", "无更新日志")
 
-    is_debug = commit and commit != "Release"
+    is_debug = commit and commit = "Pre-release"
 
     if is_debug:
-        # 调试版：显示版本 +  Pre-release 标签
-        version_display = f"{version} ({commit})"
-        tags = "#安卓(root模块) #debug"
+        # 调试版：
+        version_display = f"{version}"
+        tags = "#moudle #root #debug"
     else:
-        # 正式版：只显示版本 + Release 标签
+        # 正式版：
         version_display = version
-        tags = "#安卓(root模块)"
+        tags = "#moudle #root"
 
     # 构建最终消息（手动拼接，防止模板 format 报错）
     msg = (
-        "📦 **box for root模块**\n\n"
+        "📦 **安卓(root)模块**\n\n"
         f"**版本:** {version_display}\n"
         f"**日期:** {date}\n"
         f"**内容:** {changelog}\n\n"
         "[仓库地址](https://github.com/ljrgov/box_for_root) | "
-        "[{commit} 详情](https://github.com/ljrgov/box_for_root/releases)\n\n"
+        "[发布详情](https://github.com/ljrgov/box_for_root/releases)\n\n"
         f"{tags}"
     ).strip()
 
