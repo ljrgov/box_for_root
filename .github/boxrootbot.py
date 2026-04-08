@@ -23,7 +23,7 @@ MSG_TEMPLATE = """
 
 [仓库地址](https://github.com/ljrgov/box_for_root) | [Release 详情](https://github.com/ljrgov/box_for_root/releases)
 
-#module #ksu #apatch #magisk #root
+#module #root
 """.strip()
 
 def check_environ():
@@ -40,20 +40,34 @@ def check_environ():
             exit(1)
 
 def get_caption():
-    # 这里的变量名要和 MSG_TEMPLATE 里的 {xxx} 对应
-    # 使用 .get() 并在没有值时提供默认字符串，防止 KeyError
-    data = {
-        "version": os.environ.get("VERSION", "Unknown"),
-        "commit": os.environ.get("COMMIT", "N/A"),
-        "date": os.environ.get("DATE", "N/A"),
-        "changelog": os.environ.get("CHANGELOG", "无更新日志")
-    }
-    
-    try:
-        msg = MSG_TEMPLATE.format_map(data)
-    except Exception as e:
-        msg = f"📦 Box for Root 更新\n版本: {data['version']}\n提交: {data['commit']}"
-    # 限制长度在 1024 字符内 (TG Caption 硬性限制)
+    # 获取环境变量
+    version = os.environ.get("VERSION", "Unknown")
+    commit = os.environ.get("COMMIT", "")
+    date = os.environ.get("DATE", "")
+    changelog = os.environ.get("CHANGELOG", "无更新日志")
+
+    is_debug = commit and commit != "none"
+
+    if is_debug:
+        # 调试版：显示版本 (哈希) + 后面加 #debug 标签
+        version_display = f"{version} ({commit})"
+        tags = "#module #root #debug"
+    else:
+        # 正式版：只显示版本
+        version_display = version
+        tags = "#module #root"
+
+    # 构建最终消息（手动拼接，防止模板 format 报错）
+    msg = (
+        "📦 **box for root模块**\n\n"
+        f"**版本:** {version_display}\n"
+        f"**日期:** {date}\n"
+        f"**内容:** {changelog}\n\n"
+        "[仓库地址](https://github.com/ljrgov/box_for_root) | "
+        "[Release 详情](https://github.com/ljrgov/box_for_root/releases)\n\n"
+        f"{tags}"
+    ).strip()
+
     return msg[:1024]
 
 async def main():
