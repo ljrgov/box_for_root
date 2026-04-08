@@ -83,7 +83,7 @@ jobs:
             --title "Pre-release ${VERSION}" \
             --notes "pre-release build from commit $(git log -1 --pretty=%h)"
 
-      - name: Upload to Telegram
+      - name: Upload to Telegram (Debug Mode)
         env:
           CHAT_ID: ${{ secrets.CHAT_ID }}
           MESSAGE_THREAD_ID: ${{ secrets.MESSAGE_THREAD_ID }}
@@ -91,12 +91,27 @@ jobs:
           API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
-          # 提取数据
+          # 从模块文件提取版本号
           export VERSION=$(grep 'version=' module.prop | awk -F '=' '{print $2}')
-          export DATE=$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M")
-          # 自动构建时，内容取最后一条 commit message
-          export CHANGELOG=$(git log -1 --pretty=%B | head -n 1)
           
+          # 自动获取当前提交的短哈希 (指纹)
+          export COMMIT=$(git rev-parse --short HEAD)
+          
+          # 获取当前时间
+          export DATE=$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M")
+          
+          # 获取最后一条 commit message 作为日志，并用双引号包裹防止换行导致崩溃
+          export CHANGELOG="$(git log -1 --pretty=%B | head -n 1)"
+          
+          # 查找生成的 zip 文件
           FILE=$(find . -name "*.zip" | head -n 1)
+          
+          if [ -z "$FILE" ]; then
+            echo "[-] Error: No zip file found!"
+            exit 1
+          fi
+
+          echo "[+] Preparing to upload: $FILE (Version: $VERSION, Commit: $COMMIT)"
+          
           pip3 install --quiet telethon==1.31.1
           python3 .github/boxrootbot.py "$FILE"
