@@ -91,10 +91,13 @@ jobs:
           API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
-          if [ ! -z "${{ secrets.BOT_TOKEN }}" ]; then
-            export VERSION=$(cat module.prop | grep 'version=' | awk -F '=' '{print $2}')
-            export COMMIT=$(git log --oneline -n 5 --no-decorate | sed 's/^[0-9a-f]* //' | sed 's/^/— /')
+          if [ -n "${{ secrets.BOT_TOKEN }}" ]; then
+            # 1. 写入 GITHUB_ENV，确保 Python 能读取到
+            echo "VERSION=$(grep 'version=' module.prop | awk -F '=' '{print $2}')" >> $GITHUB_ENV
+            echo "COMMIT=$(git log --oneline -n 5 --no-decorate | sed 's/^[0-9a-f]* //' | sed 's/^/— /')" >> $GITHUB_ENV
+            
+            # 2. 安装依赖并运行（此时环境变量已生效）
             FILE=$(find . -name "*.zip")
             pip3 install telethon==1.31.1
-            python3 $GITHUB_WORKSPACE/.github/boxrootbot.py "$FILE"
+            python3 .github/boxrootbot.py "$FILE"
           fi
