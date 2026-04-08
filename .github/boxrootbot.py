@@ -10,16 +10,19 @@ CHAT_ID_RAW = os.environ.get("CHAT_ID")
 MESSAGE_THREAD_ID_RAW = os.environ.get("MESSAGE_THREAD_ID")
 VERSION = os.environ.get("VERSION")
 COMMIT = os.environ.get("COMMIT")
+DATE = os.environ.get("DATE")
+CHANGELOG = os.environ.get("CHANGELOG") 
 
 MSG_TEMPLATE = """
-{version}
+📦 **box for root模块**
 
-{commit}
+**版本:** {version}
+**日期:** {date}
+**内容:** {changelog}
 
-[Github](https://github.com/ljrgov/box_for_root)
-[Releases](https://github.com/ljrgov/box_for_root/releases)
+[仓库地址](https://github.com/ljrgov/box_for_root) | [Release 详情](https://github.com/ljrgov/box_for_root/releases)
 
-#module #ksu #apatch #magisk #root #debug
+#module #ksu #apatch #magisk #root
 """.strip()
 
 
