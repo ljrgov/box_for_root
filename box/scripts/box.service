@@ -259,7 +259,27 @@ prepare_singbox() {
           "include_uid": [],
           "exclude_uid": []
         }]' -i --output-format=json "${sing_config}"
-        log Debug "已为 ${sing_config} 添加 [Tun] 配置"
+        # log Debug "已为 ${sing_config} 添加 [Tun] 配置"
+        # 若 ipv6 未启用，移除 IPv6 地址
+        if [ "${ipv6}" != "true" ]; then
+          ${yq} 'del(.inbounds[] | select(.type == "tun") | .address[] | select(test(":")))' \
+            -i --output-format=json "${sing_config}"
+          # log Debug "已移除 ${sing_config} tun 配置中的 IPv6 地址"
+        fi
+      else
+        # tun 配置已存在，同步 IPv6 地址
+        if [ "${ipv6}" != "true" ]; then
+          ${yq} 'del(.inbounds[] | select(.type == "tun") | .address[] | select(test(":")))' \
+            -i --output-format=json "${sing_config}"
+          # log Debug "已移除 ${sing_config} tun 配置中的 IPv6 地址"
+        else
+          # 确保 IPv6 地址存在
+          if ! busybox grep -q 'fdfe:dcba:9876::1/126' "${sing_config}"; then
+            ${yq} '(.inbounds[] | select(.type == "tun") | .address) += ["fdfe:dcba:9876::1/126"]' \
+              -i --output-format=json "${sing_config}"
+            # log Debug "已为 ${sing_config} tun 配置补充 IPv6 地址"
+          fi
+        fi
       fi
     else
       # 非 tun 模式，关闭 auto_route
@@ -727,10 +747,10 @@ set_description() {
 
   case "$status" in
     running)
-      desc="✅ 服务运行中 | 内核: ${bin_name} | 代理模式: ${proxy_mode} | 网络: ${network_mode} | IPv6状态: ${ipv6_info} | DNS模式: ${dns_mode}${wifi_match_str}"
+      desc="✅[${current_time}] 服务运行中 | 内核: ${bin_name} | 代理模式: ${proxy_mode} | 网络: ${network_mode} | IPv6状态: ${ipv6_info} | DNS模式: ${dns_mode}${wifi_match_str}"
       ;;
     stopped)
-      desc="❌ 服务已停止 | 内核: ${bin_name} | 时间: ${current_time} | 代理已禁用"
+      desc="❌[${current_time}] 服务已停止 | 内核: ${bin_name} | 代理已禁用"
       ;;
     idle)
       desc="✨ Box模块已加载，等待服务启动"
@@ -740,7 +760,7 @@ set_description() {
       local current_time
       current_time=$(date "+%Y-%m-%d %H:%M:%S")
       [ -z "${error_msg}" ] && error_msg="配置错误"
-      desc="⚠️ ${error_msg} | 时间: ${current_time} | 内核: ${bin_name} | 详情见日志: ${box_run}/${bin_name}.log"
+      desc="⚠️ ${error_msg} | 内核: ${bin_name} | 详情见日志: ${box_run}/${bin_name}.log"
       ;;
     *)
       desc="💤 Box状态未知"
