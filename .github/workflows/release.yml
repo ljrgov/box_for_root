@@ -88,7 +88,7 @@ jobs:
           files: box_for_root-*.zip
           generate_release_notes: true
           body: |
-            #### Changelog $VERSION
+            #### Changelog ${{ github.event.inputs.tag }}
             ${{ github.event.inputs.changelog }} 
 
       # 7. 上传到 Telegram
