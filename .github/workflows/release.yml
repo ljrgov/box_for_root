@@ -84,11 +84,11 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.event.inputs.tag }}
+          tag_name: "$INPUT_TAG"
           files: box_for_root-*.zip
           generate_release_notes: true
           body: |
-            #### Changelog v${{ github.event.inputs.tag }}
+            #### Changelog v$VERSION
             ${{ github.event.inputs.changelog }} 
 
       # 7. 上传到 Telegram
@@ -101,7 +101,7 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
           # 核心版本信息
-          export VERSION="${{ github.event.inputs.tag }}"
+          export VERSION="$VERSION"
           
           # 显示设置为空
           export COMMIT=""
