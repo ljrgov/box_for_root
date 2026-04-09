@@ -44,7 +44,7 @@ jobs:
           {
             "version": "$VERSION",
             "versionCode": "$DATE_NUM",
-            "zipUrl": "https://github.com/ljrgov/box_for_root/releases/download/$VERSION/box_for_root-$VERSION.zip",
+            "zipUrl": "https://github.com/ljrgov/box_for_root/releases/download/${{ github.event.inputs.tag }}/box_for_root-$VERSION.zip",
             "changelog": "https://raw.githubusercontent.com/ljrgov/box_for_root/refs/heads/master/CHANGELOG.md"
           }
           EOF
@@ -84,7 +84,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: $VERSION
+          tag_name: "${{ github.event.inputs.tag }}"
           files: box_for_root-*.zip
           generate_release_notes: true
           body: |
@@ -101,7 +101,7 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
           # 核心版本信息
-          export VERSION=$VERSION
+          export VERSION="${{ github.event.inputs.tag }}"
           
           # 显示设置为空
           export COMMIT=""
