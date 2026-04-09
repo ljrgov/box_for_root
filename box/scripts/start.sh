@@ -1,13 +1,12 @@
 #!/system/bin/sh
-# Validate settings.ini
-if ! /system/bin/sh -n /data/adb/box/settings.ini 2>"/data/adb/box/run/settings_err.log"; then
-  echo "Err: settings.ini contains a syntax error" | tee -a "/data/adb/box/run/settings_err.log"
-  exit 1
-fi
 
 scripts_dir="${0%/*}"
 file_settings="/data/adb/box/settings.ini"
 moddir="/data/adb/modules/box_for_root"
+
+if [ -f "$file_settings" ]; then
+    . "$file_settings"
+fi
 
 # busybox Magisk/KSU/Apatch
 busybox="/data/adb/magisk/busybox"
@@ -22,19 +21,28 @@ wait_for_data_ready() {
 
 refresh_box() {
   if [ -f "/data/adb/box/run/box.pid" ]; then
-    "${scripts_dir}/box.service" stop >> "/dev/null" 2>&1
-    "${scripts_dir}/box.iptables" disable >> "/dev/null" 2>&1
+    "${scripts_dir}/box.service" stop > "/dev/null" 2>&1
+    "${scripts_dir}/box.iptables" disable > "/dev/null" 2>&1
   fi
 }
 
 start_service() {
+  if [ -f "$file_settings" ]; then
+    . "$file_settings"
+  fi
+  
+  if [ "$boot_auto_start" = "false" ]; then
+    echo "开机自启已禁用，跳过启动核心服务。"
+    return 0
+  fi
+  
   if [ ! -f "${moddir}/disable" ]; then
-    "${scripts_dir}/box.service" start >> "/dev/null" 2>&1
+    "${scripts_dir}/box.service" start > "/dev/null" 2>&1
   fi
 }
 
 enable_iptables() {
-  PIDS=("clash" "xray" "sing-box" "v2fly")
+  PIDS=("mihomo" "xray" "sing-box" "v2fly")
   PID=""
   i=0
   while [ -z "$PID" ] && [ "$i" -lt "${#PIDS[@]}" ]; do
@@ -43,28 +51,18 @@ enable_iptables() {
   done
 
   if [ -n "$PID" ]; then
-    "${scripts_dir}/box.iptables" enable >> "/dev/null" 2>&1
+    "${scripts_dir}/box.iptables" enable > "/dev/null" 2>&1
   fi
 }
 
 net_inotifyd() {
-  net_dir="/data/misc/net"
-  ctr_dir="/data/misc/net/rt_tables"
-
-  # Start inotifyd to watch for network-related changes.
-  # - The /proc filesystem cannot be monitored with inotify.
-  # - Polling in a loop is inefficient, so inotify is used instead.
-  # - Here we monitor /data/misc/net and /data/misc/net/rt_tables
-  #   because they reflect changes in routing tables and interfaces.
-
-  # Wait until at least one of the target files/directories exists
-  while [ ! -f "$ctr_dir" ] && [ ! -f "$net_dir" ]; do
-      sleep 3
+  while [ ! -f /data/misc/net/rt_tables ] ; do
+    sleep 1
   done
 
-  # Launch inotifyd handlers in the background
-  inotifyd "${scripts_dir}/ctr.inotify" "$ctr_dir" >/dev/null 2>&1 &
-  inotifyd "${scripts_dir}/net.inotify" "$net_dir" >/dev/null 2>&1 &
+  net_dir="/data/misc/net"
+  # Use inotifyd to monitor write events in the /data/misc/net directory for network changes, perhaps we have a better choice of files to monitor (the /proc filesystem is unsupported) and cyclic polling is a bad solution
+  inotifyd "${scripts_dir}/net.inotify" "${net_dir}" > "/dev/null" 2>&1 &
 }
 
 start_inotifyd() {
@@ -81,10 +79,10 @@ start_inotifyd() {
   net_inotifyd
 }
 
-mkdir -p /data/adb/box/run/
+mkdir -p /data/adb/box/run/ /data/adb/box/run/state/ /data/adb/box/run/locks/ >/dev/null 2>&1 || true
 if [ -f "/data/adb/box/manual" ]; then
   if [ -f "/data/adb/box/run/box.pid" ]; then
-      rm -rf /data/adb/box/run/box.pid
+      rm /data/adb/box/run/box.pid
   fi
   net_inotifyd
   exit 1
@@ -98,3 +96,6 @@ if [ -f "$file_settings" ] && [ -r "$file_settings" ] && [ -s "$file_settings" ]
 fi
 
 start_inotifyd
+
+# 开机60秒后执行一次 Google防火墙规则 清理
+(sleep 60 && /data/adb/box/scripts/box.tool gfw) &

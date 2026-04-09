@@ -90,26 +90,32 @@ jobs:
 
       # 7. 上传到 Telegram
       - name: Upload to Telegram
-        if: ${{ success() }}
         env:
-          CHAT_ID: "-1003729279105"
-          MESSAGE_THREAD_ID: "3729279105"
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          MESSAGE_THREAD_ID: ${{ secrets.MESSAGE_THREAD_ID }}
           API_ID: ${{ secrets.API_ID }}
           API_HASH: ${{ secrets.API_HASH }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
-          pip3 install --quiet telethon==1.31.1
-
-          # 通配符去掉了 v，兼容性
-          FILE=$(find . -maxdepth 1 -type f -name "box_for_root-*.zip" | head -n 1)
-          [ -z "$FILE" ] && echo "No ZIP file found!" && exit 1
-
-          # 使用手动输入的 tag 作为版本号显示在电报里
+          # 核心版本信息
           export VERSION="${{ github.event.inputs.tag }}"
           
-          # 依然保留最近的 commit 记录作为更新日志参考
-          export COMMIT=$(git log --oneline -n 10 --no-decorate | sed 's/^[0-9a-f]* //' | sed 's/^/— /')
+          # 显示设置为空
+          export COMMIT=""
           
+          # 处理日期
+          export DATE=$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M")
+          
+          # 使用双引号包裹 CHANGELOG，防止多行文本破坏 Shell 脚本
+          export CHANGELOG="${{ github.event.inputs.changelog }}"
+          
+          # 查找文件
+          FILE=$(find . -name "box_for_root-*.zip" | head -n 1)
+          
+          if [ -z "$FILE" ]; then
+            echo "[-] No zip file found!"
+            exit 1
+          fi
+
+          pip3 install --quiet telethon==1.31.1
           python3 .github/boxrootbot.py "$FILE"
-
-

@@ -1,341 +1,367 @@
 #!/system/bin/sh
-# Validate settings.ini
-if ! /system/bin/sh -n /data/adb/box/settings.ini 2>"/data/adb/box/run/settings_err.log"; then
-  echo "Err: settings.ini contains a syntax error" | tee -a "/data/adb/box/run/settings_err.log"
-  exit 1
-fi
 
 scripts_dir="${0%/*}"
+
+user_agent="box_for_root"
 source /data/adb/box/settings.ini
 
-# user agent
-user_agent="box_for_root"
-# whether use ghproxy to accelerate github download
-url_ghproxy="https://ghfast.top"
-use_ghproxy="false"
-# to enable/disable download the stable mihomo kernel
-mihomo_stable="enable"
-singbox_stable="enable"
+# 使用 settings.ini 中提供的 log()
+TOOL_LOG="${box_run}/tool.log"
+busybox mkdir -p "$(dirname "$TOOL_LOG")"
+box_log="$TOOL_LOG"
 
-rev1="busybox wget --no-check-certificate -qO-"
-if which curl >/dev/null; then
-  rev1="curl --progress-bar --insecure -sL"
-fi
-
-# Updating files from URLs
-upfile() {
-  file="$1"
-  update_url="$2"
-  file_bak="${file}.bak"
-  if [ -f "${file}" ]; then
-    mv "${file}" "${file_bak}" || return 1
+# 设置 GitHub API 访问配置
+setup_github_api() {
+  rev1="busybox wget --no-check-certificate -qO-"
+  if which curl >/dev/null; then
+    rev1="curl --insecure -sL"
   fi
-  # Use ghproxy
-  if [ "${use_ghproxy}" == true ] && [[ "${update_url}" == @(https://github.com/*|https://raw.githubusercontent.com/*|https://gist.github.com/*|https://gist.githubusercontent.com/*) ]]; then
+  if [ -n "$githubtoken" ]; then
+    if which curl >/dev/null; then
+      rev1="curl --insecure -sL -H \"Authorization: token ${githubtoken}\""
+    else
+      rev1="busybox wget --no-check-certificate -qO- --header=\"Authorization: token ${githubtoken}\""
+    fi
+    log Debug "GitHub Token 已配置，将使用认证访问 GitHub API"
+  else
+    log Debug "未配置 GitHub Token，将使用匿名访问 GitHub API"
+  fi
+}
+
+mask_url() {
+  local u="$1"
+  echo "$u" | sed -E 's#^([a-zA-Z][a-zA-Z0-9+.-]*://)?([^/]+).*$#\1\2/***#'
+}
+
+# 启动提示
+divider() {
+  local line="----------------------------------------"
+  [ -n "$box_log" ] && echo "$line" >> "$box_log"
+}
+trap divider EXIT
+log Info "执行命令: $0 $@"
+
+# 更新文件
+upfile() {
+  local file="$1"
+  local update_url="$2"
+  local custom_ua="$3" # 接收自定义 User-Agent
+  local current_ua
+
+  # 如果提供了自定义 UA, 则使用它; 否则使用全局默认值
+  if [ -n "${custom_ua}" ]; then
+    current_ua="${custom_ua}"
+  else
+    current_ua="${user_agent}"
+  fi
+
+  local file_bak="${file}.bak"
+  [ -f "${file}" ] && mv "${file}" "${file_bak}"
+
+  # 使用 ghproxy
+  if [ "${use_ghproxy}" = "true" ] && [[ "${update_url}" == @(https://github.com/*|https://raw.githubusercontent.com/*|https://gist.github.com/*|https://gist.githubusercontent.com/*) ]]; then
     update_url="${url_ghproxy}/${update_url}"
   fi
-  # request
-  if which curl >/dev/null; then
-    # curl="$(which curl || echo /data/adb/box/bin/curl)"
-    request="curl --progress-bar"
-    request+=" -L"
-    request+=" --insecure"
-    request+=" --user-agent ${user_agent}"
-    request+=" --connect-timeout 30 --max-time 180"
-    request+=" -o ${file}"
-    request+=" ${update_url}"
-    echo "${yellow}${request}${normal}"
-  else
-    request="busybox wget"
-    request+=" --no-check-certificate"
-    request+=" --user-agent ${user_agent}"
-    request+=" -O ${file}"
-    request+=" ${update_url}"
-    echo "${yellow}${request}${normal}"
+  
+  log_url="${update_url}"
+  if [ "${LOG_MASK_URL}" = "mask" ]; then
+    log_url="$(mask_url "${update_url}")"
   fi
-  ${request} >&2 || {
-    if [ -f "${file_bak}" ]; then
-      mv "${file_bak}" "${file}" || true
+  log Info "开始下载: ${log_url}"
+  # log Debug "保存到: ${file}"
+  log Info "使用 User-Agent: ${current_ua}"
+
+  if which curl >/dev/null; then
+    http_code=$(curl -L -s --insecure --http1.1 --compressed --user-agent "${current_ua}" -o "${file}" -w "%{http_code}" "${update_url}")
+    curl_exit_code=$?
+
+    if [ ${curl_exit_code} -ne 0 ]; then
+      log Error "使用 curl 下载失败 (退出码: ${curl_exit_code})"
+      [ -f "${file_bak}" ] && mv "${file_bak}" "${file}"
+      return 1
     fi
-    request_url=$(echo "${request}" | sed -E 's/(token=[^&]{6})[^&]*/\1*****/')
-    log Error "Download ${request_url} failed"
+
+    if [ "${http_code}" -ne 200 ]; then
+      log Error "下载失败: 服务器返回 HTTP 状态码 ${http_code}"
+      [ -f "${file_bak}" ] && mv "${file_bak}" "${file}"
+      return 1
+    fi
+  else
+    if ! busybox wget --no-check-certificate -q -U "${current_ua}" -O "${file}" "${update_url}"; then
+      log Error "使用 wget 下载失败"
+      [ -f "${file_bak}" ] && mv "${file_bak}" "${file}"
+      return 1
+    fi
+  fi
+
+  if [ ! -s "${file}" ]; then
+    log Error "下载失败: 文件为空"
+    [ -f "${file_bak}" ] && mv "${file_bak}" "${file}"
     return 1
-  }
+  fi
+  
+  log Info "下载成功"
+  rm -f "${file_bak}" 2>/dev/null
   return 0
 }
 
-# Restart the binary, after stopping and running again
-restart_box() {
-  "${scripts_dir}/box.service" restart
-  # PIDS=("clash" "xray" "sing-box" "v2fly" "hysteria")
-  PIDS=(${bin_name})
-  PID=""
-  i=0
-  while [ -z "$PID" ] && [ "$i" -lt "${#PIDS[@]}" ]; do
-    PID=$(busybox pidof "${PIDS[$i]}")
-    i=$((i+1))
-  done
-
-  if [ -n "$PID" ]; then
-    log Debug "${bin_name} Restart complete [$(date +"%F %R")]"
+# CN IPv4/IPv6 列表更新
+upcnip() {
+  local did_any=false
+  # IPv4
+  if [ "${bypass_cn_ip}" = "true" ] && [ "${bypass_cn_ip_v4}" = "true" ]; then
+    if [ -z "${cn_ip_url}" ] || [ -z "${cn_ip_file}" ]; then
+      log Warning "cn_ip_url 或 cn_ip_file 未配置，跳过 IPv4"
+    else
+      log Info "下载 CN IPv4 列表 → ${cn_ip_file}"
+      if upfile "${cn_ip_file}" "${cn_ip_url}"; then
+        log Info "CN IPv4 列表更新完成"
+        did_any=true
+      else
+        log Error "CN IPv4 列表更新失败"
+      fi
+    fi
   else
-    log Error "Failed to restart ${bin_name}."
-    ${scripts_dir}/box.iptables disable >/dev/null 2>&1
+    log Debug "未启用 IPv4 CN 分流（bypass_cn_ip/bypass_cn_ip_v4=false），跳过下载"
+  fi
+
+  # IPv6
+  if [ "${bypass_cn_ip}" = "true" ] && [ "${ipv6}" = "true" ] && [ "${bypass_cn_ip_v6}" = "true" ]; then
+    if [ -z "${cn_ipv6_url}" ] || [ -z "${cn_ipv6_file}" ]; then
+      log Warning "cn_ipv6_url 或 cn_ipv6_file 未配置，跳过 IPv6"
+    else
+      log Info "下载 CN IPv6 列表 → ${cn_ipv6_file}"
+      if upfile "${cn_ipv6_file}" "${cn_ipv6_url}"; then
+        log Info "CN IPv6 列表更新完成"
+        did_any=true
+      else
+        log Error "CN IPv6 列表更新失败"
+      fi
+    fi
+  else
+    log Debug "未启用 IPv6 CN 分流或未开启 IPv6，跳过下载"
+  fi
+
+  $did_any && return 0 || return 1
+}
+
+# 重启核心进程
+restart_box() {
+  local core_to_restart=${1:-$bin_name}
+  if [ -z "$core_to_restart" ]; then
+    log Error "restart_box: 未指定需要重启的核心"
+    return 1
+  fi
+  
+  "${scripts_dir}/box.service" restart "$core_to_restart"
+  
+  local pid
+  pid=$(busybox pidof "$core_to_restart")
+
+  if [ -n "$pid" ]; then
+    log Info "$core_to_restart 重启完成 [$(date +"%F %R")]"
+  else
+    log Error "重启 $core_to_restart 失败."
+    "${scripts_dir}/box.iptables" disable >/dev/null 2>&1
   fi
 }
 
-# Check Configuration
+# 检查配置
 check() {
-  # su -c /data/adb/box/scripts/box.tool rconf
-  log Info "Checking configuration for <${bin_name}>..."
-
   case "${bin_name}" in
     sing-box)
-      if ${bin_path} check -D "${box_dir}/${bin_name}" -c "${sing_config}" >/dev/null; then
-        log Info "${sing_config} passed"
+      if ${bin_path} check -c "${sing_config}" > "${box_run}/${bin_name}_report.log" 2>&1; then
+        log Info "${sing_config} 检查通过"
       else
-        log Error "Configuration check failed for sing-box"
-        return 1
+        log Debug "${sing_config}"
+        log Error "$(<"${box_run}/${bin_name}_report.log")" >&2
       fi
       ;;
-    clash)
-      if ${bin_path} -t -d "${box_dir}/clash" -f "${clash_config}" 2>/dev/null; then
-        log Info "${clash_config} passed"
+    mihomo)
+      if ${bin_path} -t -d "${box_dir}/mihomo" -f "${mihomo_config}" > "${box_run}/${bin_name}_report.log" 2>&1; then
+        log Info "${mihomo_config} 检查通过"
       else
-        log Error "Configuration check failed for clash"
-        return 1
+        log Debug "${mihomo_config}"
+        log Error "$(<"${box_run}/${bin_name}_report.log")" >&2
       fi
       ;;
     xray)
       export XRAY_LOCATION_ASSET="${box_dir}/xray"
-      if ${bin_path} -test -confdir "${box_dir}/${bin_name}" 2>/dev/null; then
-        log Info "Xray configuration passed"
+      if ${bin_path} -test -confdir "${box_dir}/${bin_name}" > "${box_run}/${bin_name}_report.log" 2>&1; then
+        log Info "配置检查通过"
       else
-        log Error "Configuration check failed for xray"
-        return 1
+        log Debug "$(ls ${box_dir}/${bin_name})"
+        log Error "$(<"${box_run}/${bin_name}_report.log")" >&2
       fi
       ;;
     v2fly)
       export V2RAY_LOCATION_ASSET="${box_dir}/v2fly"
-      if ${bin_path} test -d "${box_dir}/${bin_name}" >/dev/null; then
-        log Info "V2Fly configuration passed"
+      if ${bin_path} test -d "${box_dir}/${bin_name}" > "${box_run}/${bin_name}_report.log" 2>&1; then
+        log Info "配置检查通过"
       else
-        log Error "Configuration check failed for v2fly"
-        return 1
+        log Debug "$(ls ${box_dir}/${bin_name})"
+        log Error "$(<"${box_run}/${bin_name}_report.log")" >&2
       fi
       ;;
     hysteria)
-      log Info "No configuration check implemented for hysteria, skipping."
+      true
       ;;
     *)
-      log Error "<${bin_name}> unknown binary."
+      log Error "<${bin_name}> 未知的二进制文件."
       exit 1
       ;;
   esac
 }
 
-# reload base config
+# 重载基础配置
 reload() {
-  curl_command="curl"
+  ip_port=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/external-controller:/ {print $2}' "${mihomo_config}" | sed "s/'//g"; else busybox awk -F'[:,]' '/"external_controller"/ {print $2":"$3}' "${sing_config}" | sed 's/^[ \t]*//;s/"//g'; fi;)
+  secret=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/^secret:/ {print $2}' "${mihomo_config}" | sed 's/"//g'; else busybox awk -F'"' '/"secret"/ {print $4}' "${sing_config}" | head -n 1; fi;)
 
-  # Pastikan curl tersedia
+  curl_command="curl"
   if ! command -v curl >/dev/null; then
-    if [ ! -x "${bin_dir}/curl" ]; then
-      log Debug "${bin_dir}/curl not found, downloading..."
-      upcurl || { log Error "Failed to install curl"; return 1; }
+    if [ ! -e "${bin_dir}/curl" ]; then
+      log Debug "$bin_dir/curl 文件未找到, 无法重载配置"
+      log Debug "开始从 GitHub 下载"
+      upcurl || exit 1
     fi
     curl_command="${bin_dir}/curl"
   fi
 
-  # Cek config sebelum reload
-  if ! check; then
-    log Error "Configuration check failed, aborting reload."
-    return 1
-  fi
+  check
 
   case "${bin_name}" in
-    clash|sing-box)
-      if [ "${bin_name}" = "clash" ] && [ "${xclash_option}" = "mihomo" ]; then
-        endpoint="http://${ip_port}/configs?force=true"
-      else
-        endpoint="http://${ip_port}/configs"
-      fi
+    "mihomo")
+      endpoint="http://${ip_port}/configs?force=true"
 
-      if ${curl_command} -sS -X PUT \
-        -H "Authorization: Bearer ${secret}" \
-        "${endpoint}" \
-        -d '{"path": "", "payload": ""}'; then
-        log Info "${bin_name} configuration reloaded successfully."
+      if ${curl_command} -X PUT -H "Authorization: Bearer ${secret}" "${endpoint}" -d '{"path": "", "payload": ""}' 2>&1; then
+        log Info "${bin_name} 配置重载成功"
+        return 0
       else
-        log Error "${bin_name} configuration reload failed!"
+        log Error "${bin_name} 配置重载失败 !"
         return 1
       fi
       ;;
-    xray|v2fly|hysteria)
-      if [ -f "${box_pid}" ]; then
-        pid="$(<"${box_pid}")"
-        if kill -0 "$pid" 2>/dev/null; then
-          log Info "Restarting ${bin_name} (PID: $pid)"
-          restart_box
-        else
-          log Error "${bin_name} process not running!"
-          return 1
-        fi
+    "sing-box")
+      endpoint="http://${ip_port}/configs?force=true"
+      if ${curl_command} -X PUT -H "Authorization: Bearer ${secret}" "${endpoint}" -d '{"path": "", "payload": ""}' 2>&1; then
+        log Info "${bin_name} 配置重载成功."
+        return 0
       else
-        log Error "PID file for ${bin_name} not found!"
+        log Error "${bin_name} 配置重载失败 !"
         return 1
+      fi
+      ;;
+    "xray"|"v2fly"|"hysteria")
+      if [ -f "${box_pid}" ]; then
+        if kill -0 "$(<"${box_pid}" 2>/dev/null)"; then
+          restart_box
+        fi
       fi
       ;;
     *)
-      log Warning "${bin_name} does not support API reload."
+      log Warning "${bin_name} 不支持使用 API 重载配置."
       return 1
       ;;
   esac
 }
 
-# Get latest curl
+# 获取最新的 curl
 upcurl() {
+  setup_github_api
+  
   local arch
   case $(uname -m) in
     "aarch64") arch="aarch64" ;;
     "armv7l"|"armv8l") arch="armv7" ;;
-    "i686")    arch="i686" ;;
-    "x86_64")  arch="amd64" ;;
-    *)
-      log Warning "Unsupported architecture: $(uname -m)"
-      return 1
-      ;;
+    "i686") arch="i686" ;;
+    "x86_64") arch="amd64" ;;
+    *) log Warning "不支持的架构: $(uname -m)" >&2; return 1 ;;
   esac
-  log Info "Detected architecture: $(uname -m) -> ${arch}"
 
-  # Backup existing curl if present
-  log Info "Ensuring backup directory: ${bin_dir}/backup"
   mkdir -p "${bin_dir}/backup"
-  if [ -f "${bin_dir}/curl" ]; then
-    log Info "Backing up existing curl to ${bin_dir}/backup/curl.bak"
-    cp "${bin_dir}/curl" "${bin_dir}/backup/curl.bak" >/dev/null 2>&1
-  else
-    log Debug "No existing curl binary found, skipping backup."
-  fi
+  [ -f "${bin_dir}/curl" ] && cp "${bin_dir}/curl" "${bin_dir}/backup/curl.bak" >/dev/null 2>&1
 
-  # Fetch latest version from GitHub
-  log Info "Fetching latest static-curl version..."
-  local latest_version=$($rev1 "https://api.github.com/repos/stunnel/static-curl/releases" \
-    | grep "tag_name" | busybox grep -oE "[0-9.]*" | head -1)
-
-  if [ -z "$latest_version" ]; then
-    log Error "Failed to retrieve latest static-curl version."
-    return 1
-  fi
-  log Info "Latest curl version: ${latest_version}"
-
-  # Download
+  local latest_version=$($rev1 "https://api.github.com/repos/stunnel/static-curl/releases" | grep "tag_name" | busybox grep -oE "[0-9.]*" | head -1)
   local download_link="https://github.com/stunnel/static-curl/releases/download/${latest_version}/curl-linux-${arch}-glibc-${latest_version}.tar.xz"
-  log Info "Downloading from: ${download_link}"
-  if ! upfile "${bin_dir}/curl.tar.xz" "${download_link}"; then
-    log Error "Failed to download curl binary."
+  local temp_archive="${box_dir}/curl.tar.xz"
+  local temp_extract_dir="${box_dir}/curl_temp"
+
+  log Debug "下载 ${download_link}"
+  if ! upfile "${temp_archive}" "${download_link}"; then
+    log Error "下载 curl 失败"
+    return 1
+  fi
+  
+  rm -rf "${temp_extract_dir}"
+  mkdir -p "${temp_extract_dir}"
+
+  if ! busybox tar -xJf "${temp_archive}" -C "${temp_extract_dir}" >&2; then
+    log Error "解压 ${temp_archive} 失败" >&2
+    cp "${bin_dir}/backup/curl.bak" "${bin_dir}/curl" >/dev/null 2>&1 && log Info "已恢复 curl"
+    rm -f "${temp_archive}"
+    rm -rf "${temp_extract_dir}"
     return 1
   fi
 
-  # Extract
-  log Info "Extracting ${bin_dir}/curl.tar.xz..."
-  if busybox tar -xJf "${bin_dir}/curl.tar.xz" -C "${bin_dir}" >/dev/null; then
-    log Info "Extraction successful."
+  local curl_binary=$(find "${temp_extract_dir}" -type f -name "curl")
+  if [ -n "${curl_binary}" ]; then
+    mv "${curl_binary}" "${bin_dir}/curl"
+    log Info "curl 已成功更新到 ${bin_dir}/curl"
   else
-    log Error "Failed to extract ${bin_dir}/curl.tar.xz"
-    if cp "${bin_dir}/backup/curl.bak" "${bin_dir}/curl" >/dev/null 2>&1; then
-      log Info "Restored curl from backup."
-    else
-      log Error "Failed to restore curl from backup."
-      return 1
-    fi
+    log Error "在解压的存档中未找到 curl 二进制文件"
+    rm -f "${temp_archive}"
+    rm -rf "${temp_extract_dir}"
+    return 1
   fi
+  
+  chown "${box_user_group}" "${box_dir}/bin/curl"
+  chmod 0755 "${bin_dir}/curl"
 
-  # Permissions
-  log Info "Setting ownership and permissions..."
-  chown "${box_user_group}" "${bin_dir}/curl"
-  chmod 0700 "${bin_dir}/curl"
-
-  # Cleanup
-  log Info "Removing archive: ${bin_dir}/curl.tar.xz"
-  rm -f "${bin_dir}/curl.tar.xz"
-  rm -f "${bin_dir}/SHA256SUMS"
-
-  log Info "Curl update process completed."
+  rm -f "${temp_archive}"
+  rm -rf "${temp_extract_dir}"
 }
 
-# Get latest yq
+# 获取最新的 yq
 upyq() {
   local arch platform
   case $(uname -m) in
-    "aarch64")  arch="arm64"; platform="android" ;;
-    "armv7l"|"armv8l") arch="arm";   platform="android" ;;
-    "i686")     arch="386";   platform="android" ;;
-    "x86_64")   arch="amd64"; platform="android" ;;
-    *)
-      log Warning "Unsupported architecture: $(uname -m)"
-      return 1
-      ;;
+    "aarch64") arch="arm64"; platform="android" ;;
+    "armv7l"|"armv8l") arch="arm"; platform="android" ;;
+    "i686") arch="386"; platform="android" ;;
+    "x86_64") arch="amd64"; platform="android" ;;
+    *) log Warning "不支持的架构: $(uname -m)" >&2; return 1 ;;
   esac
-  log Info "Detected architecture: $(uname -m) -> platform=${platform}, arch=${arch}"
 
-  # Backup existing yq if exists
-  log Info "Ensuring backup directory: ${bin_dir}/backup"
-  mkdir -p "${bin_dir}/backup"
-  if [ -f "${box_dir}/bin/yq" ]; then
-    log Info "Backing up existing yq to ${bin_dir}/backup/yq.bak"
-    cp "${box_dir}/bin/yq" "${bin_dir}/backup/yq.bak" >/dev/null 2>&1
-  else
-    log Debug "No existing yq binary found, skipping backup."
-  fi
-
-  # Download link
   local download_link="https://github.com/taamarin/yq/releases/download/prerelease/yq_${platform}_${arch}"
-  log Info "Downloading yq from: ${download_link}"
-  if ! upfile "${box_dir}/bin/yq" "${download_link}"; then
-    log Error "Failed to download yq binary."
-    if cp "${bin_dir}/backup/yq.bak" "${box_dir}/bin/yq" >/dev/null 2>&1; then
-      log Info "Restored yq from backup."
-    else
-      log Error "Failed to restore yq from backup."
-    fi
-    return 1
-  fi
 
-  # Permissions
-  log Info "Setting ownership and permissions for yq"
+  log Debug "下载 ${download_link}"
+  upfile "${box_dir}/bin/yq" "${download_link}"
+
   chown "${box_user_group}" "${box_dir}/bin/yq"
-  chmod 0700 "${box_dir}/bin/yq"
-  rm -f "${bin_dir}/yq.bak"
-
-  log Info "yq update process completed."
+  chmod 0755 "${box_dir}/bin/yq"
 }
 
-# Check and update geoip and geosite
+# 检查并更新 geoip 和 geosite
 upgeox() {
-  # su -c /data/adb/box/scripts/box.tool geox
-  geodata_mode=$(busybox awk '!/^ *#/ && /geodata-mode:*./{print $2}' "${clash_config}")
+  geodata_mode=$(busybox awk '!/^ *#/ && /geodata-mode:*./{print $2}' "${mihomo_config}")
   [ -z "${geodata_mode}" ] && geodata_mode=false
-
+  
   case "${bin_name}" in
-    clash)
-      if [[ "${xclash_option}" == "premium" || "${geodata_mode}" == "false" ]]; then
-        geoip_file="${box_dir}/clash/Country.mmdb"
-        geoip_url="https://github.com/MetaCubeX/meta-rules-dat/raw/release/country-lite.mmdb"
-      else
-        geoip_file="${box_dir}/clash/GeoIP.dat"
+    mihomo)
+      # 根据提取到的 geodata_mode 动态分配文件名和 URL
+      if [ "${geodata_mode}" = "true" ]; then
+        geoip_file="${box_dir}/mihomo/geoip.dat"
         geoip_url="https://github.com/MetaCubeX/meta-rules-dat/raw/release/geoip-lite.dat"
+      else
+        geoip_file="${box_dir}/mihomo/GeoLite2-ASN.mmdb"
+        geoip_url="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb"
       fi
-      geosite_file="${box_dir}/clash/GeoSite.dat"
-      geosite_url="https://github.com/MetaCubeX/meta-rules-dat/raw/release/geosite.dat"
-      ;;
-    sing-box)
-      geoip_file="${box_dir}/sing-box/geoip.db"
-      geoip_url="https://github.com/MetaCubeX/meta-rules-dat/raw/release/geoip-lite.db"
-      geosite_file="${box_dir}/sing-box/geosite.db"
-      geosite_url="https://github.com/MetaCubeX/meta-rules-dat/raw/release/geosite.db"
+      # geosite_file="${box_dir}/mihomo/GeoSite.dat"
+      # geosite_url="https://github.com/MetaCubeX/meta-rules-dat/raw/release/geosite.dat"
       ;;
     *)
+      # 兼容 Xray, V2Fly 等其他需要标准 .dat 格式的内核
       geoip_file="${box_dir}/${bin_name}/geoip.dat"
       geoip_url="https://github.com/MetaCubeX/meta-rules-dat/raw/release/geoip-lite.dat"
       geosite_file="${box_dir}/${bin_name}/geosite.dat"
@@ -343,627 +369,799 @@ upgeox() {
       ;;
   esac
 
-  if [ "${update_geo}" = "true" ]; then
-    log Info "${bin_name} daily updates GeoX → $(date)"
+  if [ "${update_geo}" = "true" ] && { log Info "每日更新 GeoX" && log Debug "正在下载 ${geoip_url}"; } && upfile "${geoip_file}" "${geoip_url}" && { log Debug "正在下载 ${geosite_url}" && upfile "${geosite_file}" "${geosite_url}"; }; then
 
-    log Info "Downloading GeoIP file from: ${geoip_url}"
-    if upfile "${geoip_file}" "${geoip_url}"; then
-      log Info "GeoIP file updated: ${geoip_file}"
-    else
-      log Error "Failed to download GeoIP file."
-      return 1
-    fi
+    # 清理备份文件
+    find "${box_dir}/${bin_name}" -maxdepth 1 -type f -name "*.db.bak" -delete
+    find "${box_dir}/${bin_name}" -maxdepth 1 -type f -name "*.dat.bak" -delete
+    find "${box_dir}/${bin_name}" -maxdepth 1 -type f -name "*.mmdb.bak" -delete
 
-    log Info "Downloading GeoSite file from: ${geosite_url}"
-    if upfile "${geosite_file}" "${geosite_url}"; then
-      log Info "GeoSite file updated: ${geosite_file}"
-    else
-      log Error "Failed to download GeoSite file."
-      return 1
-    fi
-
-    log Info "Cleaning old backup files..."
-    find "${box_dir}/${bin_name}" -maxdepth 1 -type f \( -name "*.db.bak" -o -name "*.dat.bak" -o -name "*.mmdb.bak" \) -delete >/dev/null
-
-    log Info "${bin_name} GeoX update completed → $(date)"
+    log Debug "更新 GeoX 于 $(date "+%F %R")"
     return 0
   else
-    log Info "Geo update disabled, skipping."
     return 1
   fi
 }
 
-# Check and update subscription
+upgeox_all() {
+  local original_bin_name=$bin_name
+  # 移除了 sing-box，仅保留需要这些文件的内核
+  for core in mihomo xray v2fly; do
+      bin_name=$core
+      upgeox
+  done
+  bin_name=$original_bin_name
+}
+
+# 更新 mihomo 配置的 proxy-providers (多订阅动态适配)
+update_mihomo_providers() {
+  yq="yq"
+  # 1. 环境检查
+  if ! command -v yq &>/dev/null; then
+    if [ ! -e "${box_dir}/bin/yq" ]; then
+      log Debug "yq 文件未找到, 开始从 GitHub 下载"
+      ${scripts_dir}/box.tool upyq
+    fi
+    yq="${box_dir}/bin/yq"
+  fi
+
+  if [ ! -f "${mihomo_config}" ]; then
+    log Error "配置文件不存在: ${mihomo_config}"
+    return 1
+  fi
+
+  cp "${mihomo_config}" "${mihomo_config}.bak" 2>/dev/null
+  
+  # 获取订阅总数
+  local file_count=${#name_provide_mihomo_config[@]}
+  if [ "$file_count" -eq 0 ]; then
+    log Warning "没有配置的订阅文件"
+    return 1
+  fi
+
+  # log Debug "开始更新 proxy-providers 配置项 (共 ${file_count} 个订阅)..."
+  local config_dir="$(dirname "${mihomo_config}")"  
+  
+  # 检测是否存在锚点 &p (用于 Providers 内部引用模板)
+  local has_anchor=false
+  local anchor_name=""
+  anchor_name=$(grep -A 10 "proxy-providers:" "${mihomo_config}" | grep "<<: \*" | head -n1 | sed 's/.*\*//;s/ //g')
+
+  if [ -n "$anchor_name" ]; then
+    has_anchor=true
+    log Debug "检测到配置锚点: *${anchor_name}"
+  fi
+  
+  local temp_providers="${mihomo_config}.providers.tmp"
+  local temp_use_list="${mihomo_config}.use.tmp"
+  
+  # 1. 【初始化临时区块】
+  echo "proxy-providers:" > "${temp_providers}"
+  # 这里的 use: 会作为内容插件注入到匹配到的每一个锚点下方
+  echo "  use:" > "${temp_use_list}"
+  
+  # 2. 【核心循环】支持多订阅
+  for i in $(seq 0 $((file_count - 1))); do
+    local file_name="${name_provide_mihomo_config[$i]}"
+    local provider_file="${mihomo_provide_path}/${file_name}"
+    local provider_name="${file_name%.yaml}" # 提取文件名作为 Key
+    local provider_url="${subscription_url_mihomo[$i]}"
+    
+    if [ -z "${provider_url}" ]; then
+      log Warning "第 $((i+1)) 个订阅链接为空，跳过"
+      continue
+    fi
+    
+    local escaped_url="$(echo "${provider_url}" | busybox sed 's/\\/\\\\/g; s/\"/\\"/g')"
+    local relative_path="./proxy-providers/${file_name}"
+
+    # 写入 provider 配置
+    if [ "$has_anchor" = true ]; then
+      cat >> "${temp_providers}" <<EOF
+  ${provider_name}:
+    <<: *${anchor_name}    
+    override:
+      additional-prefix: "[${provider_name}] "
+    path: ${relative_path}
+    url: "${escaped_url}"
+EOF
+    else
+      cat >> "${temp_providers}" <<EOF
+  ${provider_name}:
+    type: http
+    url: "${escaped_url}"
+    path: ${relative_path}
+    interval: 86400
+    health-check:
+      enable: true
+      url: https://www.gstatic.com/generate_204
+      interval: 14400
+      timeout: 5000
+      lazy: true
+    exclude-filter: '(?i)官网|邀请|到期|流量|更新|验证|剩余|频道|长期|推广|分享|周期|我的|网址'
+    override:
+      additional-prefix: "[${provider_name}] "      
+    header:
+      User-Agent:
+        - "${subs_ua}"
+        - "${subs1_ua}"        
+
+EOF
+    fi
+    
+    # 同步到 use 列表
+    echo "    - ${provider_name}" >> "${temp_use_list}"
+  done
+
+  # 3. 【核心 AWK】避让机制的动态替换
+  local temp_output="${mihomo_config}.output.tmp"
+  awk -v new_p="${temp_providers}" -v new_u="${temp_use_list}" '
+    BEGIN { 
+      in_p=0; p_done=0; 
+      in_anchor=0; in_use_list=0 
+    }
+
+    # A. 替换顶级 proxy-providers 区块
+    /^proxy-providers:[[:space:]]*/ { 
+      in_p=1; 
+      if(!p_done){ while((getline l < new_p)>0) print l; close(new_p); p_done=1 }
+      next 
+    }
+
+    # B. 匹配锚点行 (如 All: &All)，但通过排除花括号 {} 避开规则集锚点
+    /^[A-Za-z0-9_-]+:[[:space:]]*&[A-Za-z0-9_-]+/ {
+      # 排除掉包含 behavior, format 或花括号的规则定义行
+      if ($0 ~ /\{/ || $0 ~ /behavior/ || $0 ~ /format/) {
+        in_anchor=0; print $0; next
+      }
+      in_anchor=1; in_use_list=0;
+      print $0;
+      next;
+    }
+
+    # C. 在锚点区块内寻找 use: 并注入新列表
+    in_anchor && /^[[:space:]]+use:[[:space:]]*/ {
+      while((getline l < new_u)>0) print l; 
+      close(new_u);
+      in_use_list=1; 
+      next;
+    }
+
+    # D. 状态截断：遇到任何顶格的 Key，说明当前区块结束
+    /^[A-Za-z0-9_-]+:/ && !/&/ && !/^proxy-providers:/ {
+      in_anchor=0; in_p=0; in_use_list=0;
+      print $0;
+      next;
+    }
+    # E. 过滤逻辑
+    in_p { next }
+    in_use_list && /^[[:space:]]+-/ { next } 
+    in_use_list && !/^[[:space:]]+-/ { in_use_list=0; } 
+
+    # F. 默认输出
+    { if (!in_use_list) print $0 }
+  ' "${mihomo_config}" > "${temp_output}"
+  
+  # 4. 覆盖原文件
+  mv "${temp_output}" "${mihomo_config}"
+  rm -f "${temp_providers}" "${temp_use_list}"
+  
+  # log Debug "${file_count}个订阅已同步至配置。"
+  return 0
+}
+
+# 检查并更新订阅
 upsubs() {
+  if [ "${update_subscription}" != "true" ]; then
+    log Warning "更新订阅已禁用: update_subscription=\"${update_subscription}\""
+    return 1
+  fi
+
   yq="yq"
   if ! command -v yq &>/dev/null; then
     if [ ! -e "${box_dir}/bin/yq" ]; then
-      log Debug "yq file not found, start to download from github"
+      log Debug "yq 文件未找到, 开始从 GitHub 下载"
       ${scripts_dir}/box.tool upyq
     fi
     yq="${box_dir}/bin/yq"
   fi
   case "${bin_name}" in
-    "clash")
-      # Clash Subscription
-      if [ -n "${subscription_url_clash[*]}" ]; then
-        if [ "${update_subscription}" = "true" ]; then
-          log Info "${bin_name} daily updates subscription → $(date)"
+    "mihomo")
+      local url_count=${#subscription_url_mihomo[@]}
+      local file_count=${#name_provide_mihomo_config[@]}
 
-          # renew = true → just take the first index
-          if [ "${renew}" = "true" ]; then
-            urls=("${subscription_url_clash[0]}")
-            cfgs=("${name_provide_clash_config[0]}")
-          else
-            # make sure the number of URLs and configs are the same
-            if [ "${#subscription_url_clash[@]}" -ne "${#name_provide_clash_config[@]}" ]; then
-              log Error "Mismatch: subscription_url_clash (${#subscription_url_clash[@]}) != name_provide_clash_config (${#name_provide_clash_config[@]})"
-              return 1
-            fi
-          
-            urls=("${subscription_url_clash[@]}")
-            cfgs=("${name_provide_clash_config[@]}")
-          fi
-
-          for i in "${!urls[@]}"; do
-            sub_url="${urls[$i]}"
-            clash_provide_config="${clash_provide_path}/${cfgs[$i]}"
-
-            enhanced=false
-            update_file_name="${clash_config}"
-            if [ "${renew}" != "true" ]; then
-              enhanced=true
-              update_file_name="${update_file_name}.subscription"
-            fi
-
-            # token_url="${sub_url:0:25}*****"
-            token_url=$(echo "$sub_url" | sed -E 's/(token=[^&]{6})[^&]*/\1*****/')
-            log Debug "Downloading ${token_url} → ${update_file_name}"
-            if upfile "${update_file_name}" "${sub_url}"; then
-              log Info "${update_file_name} saved"
-
-              if [ "${enhanced}" = "true" ]; then
-                mkdir -p "$(dirname "${clash_provide_config}")"
-
-                if ${yq} 'has("proxies")' "${update_file_name}" | grep -q "true"; then
-                  ${yq} '.proxies' "${update_file_name}" >/dev/null 2>&1
-                  ${yq} '.proxies' "${update_file_name}" > "${clash_provide_config}"
-                  ${yq} -i '{"proxies": .}' "${clash_provide_config}"
-
-                  if [ "${custom_rules_subs}" = "true" ]; then
-                    if ${yq} '.rules' "${update_file_name}" >/dev/null; then
-                      ${yq} '.rules' "${update_file_name}" > "${clash_provide_rules}"
-                      ${yq} -i '{"rules": .}' "${clash_provide_rules}"
-                      ${yq} -i 'del(.rules)' "${clash_config}"
-                      cat "${clash_provide_rules}" >> "${clash_config}"
-                    fi
-                  fi
-
-                  log Info "subscription success"
-                  log Info "Update subscription $(date +"%F %R")"
-                  [ -f "${update_file_name}.bak" ] && rm "${update_file_name}.bak"
-
-                elif ${yq} '.. | select(tag == "!!str")' "${update_file_name}" | grep -qE "vless://|vmess://|ss://|hysteria2://|hysteria://|trojan://|tuic://|wireguard://|socks5://|http://|snell://|mieru://|anytls://"; then
-                  mv "${update_file_name}" "${clash_provide_config}"
-                elif grep -qE '^[A-Za-z0-9+/=[:space:]]+$' "$update_file_name"; then
-                  if busybox base64 -d "$update_file_name" >/dev/null 2>&1; then
-                    log Debug "File is valid Base64"
-                    mv "${update_file_name}" "${clash_provide_config}"
-                  else
-                    log Error "File is not valid Base64"
-                    return 1
-                  fi
-                else
-                  log Error "${update_file_name} Unknown file format: cannot detect proxies, subscription URLs, or valid Base64"
-                  return 1
-                fi
-
-              else
-                if [ -f "${box_pid}" ]; then
-                  kill -0 "$(<"${box_pid}" 2>/dev/null)" && \
-                  $scripts_dir/box.service restart 2>/dev/null
-                fi
-                log Info "${bin_name} subscription update completed → $(date)"
-                exit 1
-              fi
-            else
-              log Error "update $bin_name subscription failed → ${token_url}"
-              return 1
-            fi
-          done
-          log Info "All subscriptions updated → $(date)"
-          return 0
-        else
-          log Warning "update subscription: $update_subscription"
-          return 1
-        fi
-      else
-        log Warning "${bin_name} subscription url is empty..."
-        return 0
+      if [ "$url_count" -eq 0 ]; then
+        log Warning "${bin_name} 订阅链接为空"
+        return 1
       fi
-      ;;
-    "sing-box")
-      # subscription sing-box
-      update_file_name="${sing_config}"
-      if [ -n "${subscription_url_singbox}" ]; then
-        if [ "${update_subscription}" = "true" ]; then
-          log Info "${bin_name} daily updates subscription → $(date)"
-          log Debug "Downloading ${update_file_name}"
-          if upfile "${update_file_name}" "${subscription_url_singbox}"; then
-            log Info "${update_file_name} saved"
+
+      if [ "$url_count" -ne "$file_count" ]; then
+        log Error "订阅链接数量 (${url_count}) 与文件名数量 (${file_count}) 不匹配!"
+        return 1
+      fi
+
+      log Info "${bin_name} 开始更新 ${url_count} 个订阅 → $(date)"
+      
+      if [ -z "${mihomo_provide_path}" ] || ! mkdir -p "${mihomo_provide_path}"; then
+          log Error "mihomo_provide_path 未定义或无法创建目录!"
+          return 1
+      fi
+
+      local success_count=0
+      local update_failed=false
+      local rules_extracted=false
+
+      for i in $(seq 0 $((url_count - 1))); do
+        local url="${subscription_url_mihomo[$i]}"
+        local file_name="${name_provide_mihomo_config[$i]}"
+        local provider_file="${mihomo_provide_path}/${file_name}"
+        
+        log Debug "--> 正在处理订阅 #${i}: ${file_name}"
+
+        if [ "${renew}" = "true" ] && [ "$i" -eq 0 ]; then
+          log Info "检测到 renew=true, 仅使用第一个订阅链接更新"
+          if LOG_MASK_URL=mask upfile "${mihomo_config}" "${url}" "${subs_ua}"; then
+            log Info "${mihomo_config} 更新成功"
             if [ -f "${box_pid}" ]; then
               kill -0 "$(<"${box_pid}" 2>/dev/null)" && \
               $scripts_dir/box.service restart 2>/dev/null
             fi
-            log Info "${bin_name} subscription update completed → $(date)"
-            exit 1
+            log Info "${bin_name} 订阅更新完成 → $(date)"
+            exit 0
           else
-            log Error "update subscription failed"
-            return 1
+            log Error "${mihomo_config} 更新失败"
+            exit 1
+          fi
+        fi
+        
+        if LOG_MASK_URL=mask upfile "${provider_file}" "${url}" "${subs_ua}"; then
+          log Info "文件大小: $(wc -c < "${provider_file}" 2>/dev/null || echo "未知") 字节"
+          log Info "文件路径: ${provider_file}"
+          
+          local decoded_content
+          decoded_content=$(base64 -d "${provider_file}" 2>/dev/null)
+
+          if [ $? -eq 0 ] && echo "${decoded_content}" | grep -qE "vless://|vmess://|ss://|hysteria://|hysteria2://|anytls://|trojan://"; then
+            log Debug "检测到 Base64 编码订阅, 正在解码..."
+            echo "${decoded_content}" > "${provider_file}"
+            local proxy_count=$(echo "${decoded_content}" | grep -cE "vless://|vmess://|ss://|hysteria://|hysteria2://|anytls://|trojan://")
+            log Info "提取到 ${proxy_count} 个代理节点"
+            log Debug "订阅 #${i} (Base64解码/原始链接) 已保存"
+            success_count=$((success_count + 1))
+          elif ${yq} 'has("proxies")' "${provider_file}" 2>/dev/null; then
+            if [ "${custom_rules_subs}" = "true" ] && [ "$rules_extracted" = "false" ]; then
+              if ${yq} 'has("rules")' "${provider_file}" &>/dev/null; then
+                log Info "在 ${file_name} 中找到规则, 正在提取..."
+                ${yq} '.rules' "${provider_file}" > "${mihomo_provide_rules}"
+                ${yq} -i '{"rules": .}' "${mihomo_provide_rules}"
+                log Info "规则已提取到 ${mihomo_provide_rules}"
+                rules_extracted=true
+              fi
+            fi
+
+            # log Debug "标准订阅格式, 正在提取 proxies 并覆盖原文件..."
+            local temp_proxies_file
+            temp_proxies_file=$(mktemp)
+            
+            # 提取 proxies 数组并验证
+            # log Debug "尝试提取 proxies 字段..."     
+            if ${yq} '.proxies' "${provider_file}" > "${temp_proxies_file}" 2>/dev/null; then
+              if [ -s "${temp_proxies_file}" ]; then
+                local proxy_count=$(${yq} 'length' "${temp_proxies_file}" 2>/dev/null || echo "0")
+                log Info "提取到 ${proxy_count} 个代理节点"
+                ${yq} -i '{"proxies": .}' "${temp_proxies_file}"
+                mv "${temp_proxies_file}" "${provider_file}"
+                log Info "订阅 #${i} (标准格式) 已处理并保存"
+                success_count=$((success_count + 1))
+              else
+                log Error "订阅 #${i} (${file_name}) proxies 字段为空"
+                rm -f "${temp_proxies_file}" "${provider_file}"
+                update_failed=true
+              fi
+            else
+              log Error "订阅 #${i} (${file_name}) yq 提取 proxies 失败"
+              rm -f "${temp_proxies_file}" "${provider_file}"
+              update_failed=true
+            fi
+
+          elif ${yq} '.. | select(tag == "!!str")' "${provider_file}" 2>/dev/null | grep -qE "vless://|vmess://|ss://|hysteria://|hysteria2://|anytls://|trojan://"; then
+            local proxy_count=$(${yq} '.. | select(tag == "!!str")' "${provider_file}" 2>/dev/null | grep -cE "vless://|vmess://|ss://|hysteria://|hysteria2://|anytls://|trojan://")
+            log Info "提取到 ${proxy_count} 个代理节点"
+            log Debug "订阅 #${i} (原始链接) 已保存"
+            success_count=$((success_count + 1))
+          else
+            log Error "订阅 #${i} (${file_name}) 格式无法识别或内容为空, 已删除"
+            rm -f "${provider_file}"
+            update_failed=true
           fi
         else
-          log Warning "update subscription: $update_subscription"
+          log Error "订阅 #${i} (${file_name}) 下载失败"
+          update_failed=true
+        fi
+      done
+
+      log Info "成功更新 ${success_count} / ${url_count} 个订阅"
+      
+      if [ "${renew}" != "true" ] && [ "${success_count}" -gt 0 ]; then
+        if [ "${auto_modify_config}" = "true" ]; then
+          log Debug "同步订阅至配置: ${name_mihomo_config} ..."
+          if update_mihomo_providers; then
+            log Info "订阅更新同步成功"
+          else
+            log Warning "proxy-providers 更新同步失败，请手动检查配置文件"
+          fi
+        else
+          log Info "auto_modify_config 未启用，跳过更新同步 proxy-providers 字段"
+        fi
+      fi
+      
+      if [ "${update_failed}" = "true" ]; then
+        log Error "部分订阅链接更新失败"
+        return 1
+      else
+        log Info "更新订阅于 $(date +"%F %R")"
+        return 0
+      fi
+      ;;
+    "sing-box")
+      update_file_name="${sing_config}"
+      if [ -n "${subscription_url_singbox}" ]; then
+        log Info "${bin_name} 每日更新订阅 → $(date)"
+        log Debug "正在下载 ${update_file_name}"
+        if upfile "${update_file_name}" "${subscription_url_singbox}" "sing-box"; then
+          log Info "${update_file_name} 已保存"
+          log Info "更新订阅于 $(date +"%F %R")"
+          if [ -f "${box_pid}" ]; then
+            kill -0 "$(<"${box_pid}" 2>/dev/null)" && \
+            $scripts_dir/box.service restart 2>/dev/null
+          fi
+          return 0
+        else
+          log Error "更新订阅失败"
           return 1
         fi
       else
-        log Warning "${bin_name} subscription url is empty..."
+        log Warning "${bin_name} 订阅链接为空..."
         return 1
       fi
       ;;
     "xray"|"v2fly"|"hysteria")
-      log Warning "${bin_name} does not support subscriptions.."
+      log Warning "${bin_name} 不支持订阅功能.."
       return 1
       ;;
     *)
-      log Error "<${bin_name}> unknown binary."
+      log Error "<${bin_name}> 未知的二进制文件."
       return 1
       ;;
   esac
 }
 
 upkernel() {
-  # su -c /data/adb/box/scripts/box.tool upkernel
+  setup_github_api
+  
+  local core_to_update="$1"
+  if [ -z "$core_to_update" ]; then
+    log Error "upkernel: 未提供核心名称"
+    return 1
+  fi
+
   mkdir -p "${bin_dir}/backup"
-  if [ -f "${bin_dir}/${bin_name}" ]; then
-    cp "${bin_dir}/${bin_name}" "${bin_dir}/backup/${bin_name}.bak" >/dev/null 2>&1
+  if [ -f "${bin_dir}/${core_to_update}" ]; then
+    cp "${bin_dir}/${core_to_update}" "${bin_dir}/backup/${core_to_update}.bak" >/dev/null 2>&1
   fi
   case $(uname -m) in
-    "aarch64") if [ "${bin_name}" = "clash" ]; then arch="arm64-v8"; else arch="arm64"; fi; platform="android" ;;
+    "aarch64") 
+      if [ "$core_to_update" = "mihomo" ]; then 
+        arch="arm64-v8"
+      else 
+        arch="arm64"
+      fi
+      platform="android"
+      ;;
     "armv7l"|"armv8l") arch="armv7"; platform="linux" ;;
     "i686") arch="386"; platform="linux" ;;
     "x86_64") arch="amd64"; platform="linux" ;;
-    *) log Warning "Unsupported architecture: $(uname -m)" >/dev/null; exit 1 ;;
+    *) log Warning "不支持的架构: $(uname -m)" >&2; return 1 ;;
   esac
-  # Do anything else below
-  file_kernel="${bin_name}-${arch}"
-  case "${bin_name}" in
+  
+  local file_kernel="${core_to_update}-${arch}"
+  case "${core_to_update}" in
+    "mihomo_smart")
+      log Info "正在更新 mihomo-smart 核心 (来自 vernesong/mihomo)"
+      local arch_smart
+      case $(uname -m) in
+        "aarch64") arch_smart="arm64-v8" ;;
+        *) log Error "mihomo-smart 当前仅支持 aarch64 架构"; return 1 ;;
+      esac
+
+      local release_page_url="https://github.com/vernesong/mihomo/releases/expanded_assets/Prerelease-Alpha"
+      [ "${use_ghproxy}" = "true" ] && release_page_url="${url_ghproxy}/${release_page_url}"
+      
+      local smart_version_tag=$($rev1 "${release_page_url}" | busybox grep -oE "smart-[a-f0-9]+" | head -1)
+
+      if [ -z "$smart_version_tag" ]; then
+        log Error "获取 mihomo-smart 最新版本标签失败"
+        return 1
+      fi
+
+      local download_link="https://github.com/vernesong/mihomo/releases/download/Prerelease-Alpha/mihomo-android-${arch_smart}-alpha-${smart_version_tag}.gz"
+      local file_kernel="${core_to_update}-${arch_smart}"
+      
+      log Debug "下载 ${download_link}"
+      upfile "${box_dir}/${file_kernel}.gz" "${download_link}" && xkernel "$core_to_update" "" "" "" "$file_kernel"
+      ;;
     "sing-box")
       api_url="https://api.github.com/repos/SagerNet/sing-box/releases"
       url_down="https://github.com/SagerNet/sing-box/releases"
-    
+
       if [ "${singbox_stable}" = "disable" ]; then
-        log Info "Fetching ${bin_name} pre-release version info..."
-        latest_version=$($rev1 "${api_url}" \
-          | grep "tag_name" | busybox grep -oE "v[0-9].*" | head -1 | cut -d'"' -f1)
+        log Debug "下载 ${core_to_update} 预发行版"
+        latest_version=$($rev1 "${api_url}" | grep "tag_name" | busybox grep -oE "v[0-9].*" | head -1 | cut -d'"' -f1)
       else
-        log Info "Fetching ${bin_name} latest stable version info..."
-        latest_version=$($rev1 "${api_url}/latest" \
-          | grep "tag_name" | busybox grep -oE "v[0-9.]*" | head -1)
+        log Debug "下载 ${core_to_update} 最新稳定版"
+        latest_version=$($rev1 "${api_url}/latest" | grep "tag_name" | busybox grep -oE "v[0-9.]*" | head -1)
       fi
-    
+
       if [ -z "$latest_version" ]; then
-        log Error "Failed to get latest version of sing-box."
+        log Error "获取 sing-box 最新 稳定版/测试版/Alpha版 失败"
         return 1
       fi
-      log Info "Latest ${bin_name} version: ${latest_version}"
-    
+
       download_link="${url_down}/download/${latest_version}/sing-box-${latest_version#v}-${platform}-${arch}.tar.gz"
-      log Info "Downloading from: ${download_link}"
-    
-      if upfile "${box_dir}/${file_kernel}.tar.gz" "${download_link}"; then
-        log Info "Download completed: ${box_dir}/${file_kernel}.tar.gz"
-        log Info "Installing ${bin_name}..."
-        xkernel
+      log Debug "下载 ${download_link}"
+      upfile "${box_dir}/${file_kernel}.tar.gz" "${download_link}" && xkernel "$core_to_update" "$platform" "$arch" "$latest_version" "$file_kernel"
+      ;;
+    "mihomo")
+      download_link="https://github.com/MetaCubeX/mihomo/releases"
+
+      if [ "${mihomo_stable}" = "enable" ]; then
+        latest_version=$($rev1 "https://api.github.com/repos/MetaCubeX/mihomo/releases" | grep "tag_name" | busybox grep -oE "v[0-9.]*" | head -1)
+        tag="$latest_version"
       else
-        log Error "Failed to download ${bin_name} binary."
+        if [ "$use_ghproxy" == true ]; then
+          download_link="${url_ghproxy}/${download_link}"
+        fi
+        tag="Prerelease-Alpha"
+        latest_version=$($rev1 "${download_link}/expanded_assets/${tag}" | busybox grep -oE "alpha-[0-9a-z]+" | head -1)
+      fi
+
+      if [ -z "$latest_version" ]; then
+        log Error "获取 mihomo 最新 稳定版/预发行版 失败"
         return 1
       fi
-      ;;
-    "clash")
-      # If mihomo flag is active, download mihomo, otherwise give a warning.
-      if [ "${xclash_option}" = "mihomo" ]; then
-        download_link="https://github.com/MetaCubeX/mihomo/releases"
-        log Info "Updating Clash (mihomo) kernel from ${download_link}"
 
-        if [ "${mihomo_stable}" = "enable" ]; then
-          log Info "Fetching latest stable version..."
-          latest_version=$($rev1 "https://api.github.com/repos/MetaCubeX/mihomo/releases" \
-            | grep "tag_name" | busybox grep -oE "v[0-9.]*" | head -1)
-          if [ -z "${latest_version}" ]; then
-            log Error "Failed to retrieve latest stable version."
-            return 1
-          fi
-          tag="$latest_version"
-          log Info "Latest stable version: ${tag}"
-        else
-          log Info "Fetching latest alpha (Prerelease) version..."
-          if [ "$use_ghproxy" == true ]; then
-            log Info "Using GHProxy mirror: ${url_ghproxy}"
-            download_link="${url_ghproxy}/${download_link}"
-          fi
-          tag="Prerelease-Alpha"
-          latest_version=$($rev1 "${download_link}/expanded_assets/${tag}" \
-            | busybox grep -oE "alpha-[0-9a-z]+" | head -1)
-          if [ -z "${latest_version}" ]; then
-            log Error "Failed to retrieve latest alpha version."
-            return 1
-          fi
-          log Info "Latest alpha version: ${latest_version}"
-        fi
-
-        # Set file names according to platform and architecture
-        filename="mihomo-${platform}-${arch}-${latest_version}"
-        log Info "Preparing to download: ${filename}.gz"
-
-        # Download file
-        full_url="${download_link}/download/${tag}/${filename}.gz"
-        log Info "Downloading from: ${full_url}"
-        if upfile "${box_dir}/${file_kernel}.gz" "${full_url}"; then
-          log Info "Download completed successfully: ${box_dir}/${file_kernel}.gz"
-          log Info "Installing kernel..."
-          xkernel
-        else
-          log Error "Failed to download mihomo binary."
-          return 1
-        fi
-      else
-        log Warning "clash.${xclash_option} repository has been deleted."
+      local extension="gz"
+      if [ "${platform}" = "android" ]; then
+        extension="zip"
       fi
+
+      filename="mihomo-${platform}-${arch}-${latest_version}"
+      log Debug "下载 ${download_link}/download/${tag}/${filename}.gz"
+      upfile "${box_dir}/${file_kernel}.gz" "${download_link}/download/${tag}/${filename}.gz" && xkernel "$core_to_update" "" "" "" "$file_kernel"
       ;;
     "xray"|"v2fly")
-      # Specify the binary name
-      if [ "${bin_name}" = "xray" ]; then
-        bin='Xray'
-        repo_path="XTLS/Xray-core/releases"
-      else
-        bin='v2ray'
-        repo_path="v2fly/v2ray-core/releases"
-      fi
-      api_url="https://api.github.com/repos/${repo_path}"
-    
-      log Info "Updating ${bin_name} from ${repo_path}"
-      log Info "Fetching latest release info from ${api_url}..."
-    
-      # Get the latest version
-      latest_version=$($rev1 "${api_url}" | grep "tag_name" | busybox grep -oE "v[0-9.]*" | head -1)
-      if [ -z "${latest_version}" ]; then
-        log Error "Failed to retrieve latest version for ${bin_name}."
-        exit 1
-      fi
-      log Info "Latest ${bin_name} version: ${latest_version}"
-    
-      # Specify files according to architecture
-      case $(uname -m) in
-        "i386")    download_file="${bin}-linux-32.zip" ;;
-        "x86_64")  download_file="${bin}-linux-64.zip" ;;
-        "armv7l"|"armv8l") download_file="${bin}-linux-arm32-v7a.zip" ;;
-        "aarch64") download_file="${bin}-android-arm64-v8a.zip" ;;
-        *)
-          log Error "Unsupported architecture: $(uname -m)"
-          exit 1
-          ;;
-      esac
-      log Info "Detected architecture: $(uname -m) -> file: ${download_file}"
-    
-      # Set link download
-      download_link="https://github.com/${repo_path}"
-      full_url="${download_link}/download/${latest_version}/${download_file}"
-      log Info "Downloading from: ${full_url}"
-    
-      # Download & execute xkernel
-      if upfile "${box_dir}/${file_kernel}.zip" "${full_url}"; then
-        log Info "Download completed: ${box_dir}/${file_kernel}.zip"
-        log Info "Extracting and installing..."
-        xkernel
-      else
-        log Error "Failed to download ${bin_name} binary."
+      [ "${core_to_update}" = "xray" ] && bin='Xray' || bin='v2ray'
+      api_url="https://api.github.com/repos/$(if [ "${core_to_update}" = "xray" ]; then echo "XTLS/Xray-core/releases"; else echo "v2fly/v2ray-core/releases"; fi)"
+      latest_version=$($rev1 ${api_url} | grep "tag_name" | busybox grep -oE "v[0-9.]*" | head -1)
+
+      if [ -z "$latest_version" ]; then
+        log Error "获取 ${core_to_update} 最新版本号失败"
         return 1
       fi
+
+      case $(uname -m) in
+        "i386") download_file="$bin-linux-32.zip" ;;
+        "x86_64") download_file="$bin-linux-64.zip" ;;
+        "armv7l"|"armv8l") download_file="$bin-linux-arm32-v7a.zip" ;;
+        "aarch64") download_file="$bin-android-arm64-v8a.zip" ;;
+        *) log Error "不支持的架构: $(uname -m)" >&2; return 1 ;;
+      esac
+      download_link="https://github.com/$(if [ "${core_to_update}" = "xray" ]; then echo "XTLS/Xray-core/releases"; else echo "v2fly/v2ray-core/releases"; fi)"
+      log Debug "正在下载 ${download_link}/download/${latest_version}/${download_file}"
+      upfile "${box_dir}/${file_kernel}.zip" "${download_link}/download/${latest_version}/${download_file}" && xkernel "$core_to_update" "" "" "" "$file_kernel"
       ;;
     "hysteria")
       local arch
       case $(uname -m) in
         "aarch64") arch="arm64" ;;
         "armv7l" | "armv8l") arch="armv7" ;;
-        "i686")    arch="386" ;;
-        "x86_64")  arch="amd64" ;;
+        "i686") arch="386" ;;
+        "x86_64") arch="amd64" ;;
         *)
-          log Warning "Unsupported architecture: $(uname -m)"
+          log Warning "不支持的架构: $(uname -m)"
           return 1
           ;;
       esac
-      log Info "Detected architecture: $(uname -m) -> ${arch}"
-    
-      # Create backup directory if it doesn't exist
-      log Info "Ensuring backup directory exists: ${bin_dir}/backup"
       mkdir -p "${bin_dir}/backup"
-    
-      # Backup existing Hysteria binary if it exists
       if [ -f "${bin_dir}/hysteria" ]; then
-        log Info "Backing up existing Hysteria binary to ${bin_dir}/backup/hysteria.bak"
         cp "${bin_dir}/hysteria" "${bin_dir}/backup/hysteria.bak" >/dev/null 2>&1
-      else
-        log Debug "No existing Hysteria binary found, skipping backup."
       fi
-    
-      # Fetch the latest version of Hysteria from GitHub releases
-      log Info "Fetching latest Hysteria version from GitHub..."
-      local latest_version=$($rev1 "https://api.github.com/repos/apernet/hysteria/releases" \
-        | grep "tag_name" | grep -oE "[0-9.].*" | head -1 | sed 's/,//g' | cut -d '"' -f 1)
-    
-      if [ -z "${latest_version}" ]; then
-        log Error "Failed to retrieve latest Hysteria version."
+      local latest_version=$($rev1 "https://api.github.com/repos/apernet/hysteria/releases" | grep "tag_name" | grep -oE "[0-9.].*" | head -1 | sed 's/,//g' | cut -d '"' -f 1)
+
+      if [ -z "$latest_version" ]; then
+        log Error "获取 hysteria 最新版本号失败"
         return 1
       fi
-      log Info "Latest Hysteria version: v${latest_version}"
-    
+
       local download_link="https://github.com/apernet/hysteria/releases/download/app%2Fv${latest_version}/hysteria-android-${arch}"
-      log Info "Downloading Hysteria from: ${download_link}"
-    
-      if upfile "${bin_dir}/hysteria" "${download_link}"; then
-        log Info "Hysteria binary downloaded successfully to ${bin_dir}/hysteria"
-        log Info "Reloading kernel..."
-        xkernel
-      else
-        log Error "Failed to download Hysteria binary."
-        return 1
-      fi
+
+      log Debug "正在下载 ${download_link}"
+      upfile "${bin_dir}/hysteria" "${download_link}" && xkernel "$core_to_update"
       ;;
     *)
-      log Error "<${bin_name}> unknown binary."
-      exit 1
+      log Error "<${core_to_update}> 未知的二进制文件."
+      return 1
       ;;
   esac
 }
 
-# Check and update kernel
+upkernels() {
+  for core in "$@"; do
+    upkernel "$core"
+  done
+}
+
 xkernel() {
-  case "${bin_name}" in
-    "clash")
+  local core_to_process="$1"
+  local platform="$2"
+  local arch="$3"
+  local latest_version="$4"
+  local file_kernel="$5"
+  
+  local original_bin_name=$bin_name
+  local target_bin_name="$core_to_process"
+  if [ "$core_to_process" = "mihomo_smart" ]; then
+    target_bin_name="mihomo"
+  fi
+  
+  bin_name=$core_to_process
+
+  case "${core_to_process}" in
+    "mihomo"|"mihomo_smart")
       gunzip_command="gunzip"
       if ! command -v gunzip >/dev/null; then
         gunzip_command="busybox gunzip"
-        log Info "Using busybox gunzip"
-      else
-        log Info "Using system gunzip"
       fi
 
-      mkdir -p "${bin_dir}/xclash" && \
-      log Info "Creating directory: ${bin_dir}/xclash"
-
-      log Info "Extracting kernel: ${box_dir}/${file_kernel}.gz"
-      if ${gunzip_command} "${box_dir}/${file_kernel}.gz" >/dev/null; then
-        log Info "Extraction successful: ${box_dir}/${file_kernel}"
-      
-        log Info "Moving kernel to ${bin_dir}/xclash/${xclash_option}"
-        if mv "${box_dir}/${file_kernel}" "${bin_dir}/xclash/${xclash_option}"; then
-          log Info "Kernel moved successfully."
-      
-          log Info "Creating symlink: ${bin_dir}/${bin_name} -> ${bin_dir}/xclash/${xclash_option}"
-          ln -sf "${bin_dir}/xclash/${xclash_option}" "${bin_dir}/${bin_name}"
-      
-          if [ -f "${box_pid}" ]; then
-            log Info "Restarting ${bin_name} service..."
-            restart_box
-          else
-            log Debug "${bin_name} does not need to be restarted."
-          fi
-        else
-          log Error "Failed to move the extracted kernel."
-        fi
+      if ${gunzip_command} -f "${box_dir}/${file_kernel}.gz" >&2 && mv "${box_dir}/${file_kernel}" "${bin_dir}/${target_bin_name}"; then
+        log Info "${target_bin_name} 已成功更新 (来自: ${core_to_process})"
       else
-        log Error "Failed to extract kernel: ${box_dir}/${file_kernel}.gz"
+        log Error "解压或移动 ${target_bin_name} 核心失败."
+        bin_name=$original_bin_name
+        return 1
       fi
       ;;
     "sing-box")
       tar_command="tar"
       if ! command -v tar >/dev/null; then
         tar_command="busybox tar"
-        log Info "Using busybox tar"
-      else
-        log Info "Using system tar"
       fi
-      
-      log Info "Extracting kernel archive: ${box_dir}/${file_kernel}.tar.gz"
+      log Info "正在解压 Sing-Box 核心..."
       if ${tar_command} -xf "${box_dir}/${file_kernel}.tar.gz" -C "${bin_dir}" >/dev/null; then
-        log Info "Extraction successful."
-      
-        src_dir="${bin_dir}/sing-box-${latest_version#v}-${platform}-${arch}"
-        log Info "Moving binary from ${src_dir}/sing-box to ${bin_dir}/${bin_name}"
-        if mv "${src_dir}/sing-box" "${bin_dir}/${bin_name}"; then
-          log Info "Kernel binary moved successfully."
-      
-          if [ -f "${box_pid}" ]; then
-            log Info "Removing cache.db for clean restart..."
-            rm -rf /data/adb/box/sing-box/cache.db
-      
-            log Info "Restarting ${bin_name}..."
-            restart_box
-          else
-            log Debug "${bin_name} does not need to be restarted."
-          fi
+        mv "${bin_dir}/sing-box-${latest_version#v}-${platform}-${arch}/sing-box" "${bin_dir}/${core_to_process}"
+        if [ -f "${box_pid}" ]; then
+          rm -rf /data/adb/box/sing-box/cache.db
+          restart_box "$core_to_process"
         else
-          log Error "Failed to move binary from ${src_dir}."
+          log Debug "${core_to_process} 无需重启."
         fi
       else
-        log Error "Failed to extract ${box_dir}/${file_kernel}.tar.gz."
+        log Error "解压 ${box_dir}/${file_kernel}.tar.gz 失败."
       fi
-      
-      if [ -d "${bin_dir}/sing-box-${latest_version#v}-${platform}-${arch}" ]; then
-        log Info "Cleaning up extracted directory: ${src_dir}"
-        rm -r "${src_dir}"
-      fi
+      [ -d "${bin_dir}/sing-box-${latest_version#v}-${platform}-${arch}" ] && \
+        rm -r "${bin_dir}/sing-box-${latest_version#v}-${platform}-${arch}"
       ;;
     "v2fly"|"xray")
       bin="xray"
-      if [ "${bin_name}" != "xray" ]; then
+      if [ "${core_to_process}" != "xray" ]; then
         bin="v2ray"
       fi
-      log Info "Selected binary to extract: ${bin}"
-      
       unzip_command="unzip"
       if ! command -v unzip >/dev/null; then
         unzip_command="busybox unzip"
-        log Info "Using busybox unzip"
-      else
-        log Info "Using system unzip"
       fi
-      
-      log Info "Creating temporary update directory: ${bin_dir}/update"
+
       mkdir -p "${bin_dir}/update"
-      
-      log Info "Extracting ${bin} from ${box_dir}/${file_kernel}.zip..."
-      if ${unzip_command} -o "${box_dir}/${file_kernel}.zip" "${bin}" -d "${bin_dir}/update" >/dev/null; then
-        log Info "Extraction successful."
-      
-        log Info "Moving ${bin} binary to ${bin_dir}/${bin_name}"
-        if mv "${bin_dir}/update/${bin}" "${bin_dir}/${bin_name}"; then
-          log Info "Kernel binary moved successfully."
-      
-          if [ -f "${box_pid}" ]; then
-            log Info "Restarting ${bin_name}..."
-            restart_box
-          else
-            log Debug "${bin_name} does not need to be restarted."
-          fi
+      log Info "正在解压 ${bin} 核心..."
+      if ${unzip_command} -oq "${box_dir}/${file_kernel}.zip" "${bin}" -d "${bin_dir}/update"; then
+        if mv "${bin_dir}/update/${bin}" "${bin_dir}/${core_to_process}"; then
+          true # 成功
         else
-          log Error "Failed to move the kernel binary from ${bin_dir}/update/${bin}."
+          log Error "移动核心失败."
+          rm -rf "${bin_dir}/update"
+          return 1
         fi
       else
-        log Error "Failed to extract ${box_dir}/${file_kernel}.zip."
+        log Error "解压 ${box_dir}/${file_kernel}.zip 失败."
+        rm -rf "${bin_dir}/update"
+        return 1
       fi
-      
-      log Info "Cleaning up temporary directory: ${bin_dir}/update"
       rm -rf "${bin_dir}/update"
       ;;
     "hysteria")
-      if [ -f "${box_pid}" ]; then
-        restart_box
-      else
-        log Debug "${bin_name} does not need to be restarted."
-      fi
+      true
       ;;
     *)
-      log Error "<${bin_name}> unknown binary."
-      exit 1
+      log Error "<${core_to_process}> 未知的二进制文件."
+      bin_name=$original_bin_name
+      return 1
       ;;
   esac
 
-  find "${box_dir}" -maxdepth 1 -type f -name "${file_kernel}.*" -delete >/dev/null
-  chown ${box_user_group} ${bin_path}
-  chmod 6755 ${bin_path}
-}
+  find "${box_dir}" -maxdepth 1 -type f -name "${file_kernel}.*" -delete
 
-# Check and update yacd
-upxui() {
-  # su -c /data/adb/box/scripts/box.tool upxui
-  xdashboard="${bin_name}/dashboard"
-  if [[ "${bin_name}" == @(clash|sing-box) ]]; then
-    file_dashboard="${box_dir}/${xdashboard}.zip"
-    url="https://github.com/Zephyruso/zashboard/archive/gh-pages.zip"
-    if [ "$use_ghproxy" == true ]; then
-      url="${url_ghproxy}/${url}"
-    fi
-    dir_name="zashboard-gh-pages"
-    log Debug "Download ${url}"
-
-    if which curl >/dev/null; then
-      rev2="curl -L --progress-bar --insecure ${url} -o"
+  chown ${box_user_group} "${bin_dir}/${target_bin_name}"
+  chmod 0755 "${bin_dir}/${target_bin_name}"
+  
+  if [ -f "${box_pid}" ]; then
+    if [ "$original_bin_name" = "$target_bin_name" ]; then
+      log Info "检测到正在运行的核心已被更新，将自动重启服务..."
+      restart_box "$target_bin_name"
     else
-      rev2="busybox wget --no-check-certificate ${url} -O"
+      log Info "${target_bin_name} 已更新，但当前运行的是 ${original_bin_name}，无需重启。"
     fi
-
-    if $rev2 "${file_dashboard}" >/dev/null; then
-      log Info "Dashboard file downloaded: ${file_dashboard}"
+  else
+    log Info "服务未在运行，无需重启。"
+  fi
+  
+  bin_name=$original_bin_name
+}
+upxui() {
+  if [[ "${bin_name}" == @(mihomo|sing-box) ]]; then
+    local ui_path
+    local ui_url
+    if [ "${bin_name}" = "mihomo" ]; then
+      ui_path=$(busybox awk '!/^ *#/ && /^external-ui:/ {print $2; exit}' "${mihomo_config}" | sed "s/[\"']//g")
+      ui_url=$(busybox awk '!/^ *#/ && /^external-ui-url:/ {print $2; exit}' "${mihomo_config}" 2>/dev/null | sed "s/[\"']//g")
+    else
+      ui_path=$(busybox awk -F '"' '/"external_ui"/ {print $4}' "${sing_config}" | head -n 1)
+      ui_url=$(busybox awk -F '"' '/"external_ui_download_url"/ {print $4; exit}' "${sing_config}" 2>/dev/null)
+    fi
     
-      if [ ! -d "${box_dir}/${xdashboard}" ]; then
-        log Info "Dashboard folder not exist, creating it"
-        mkdir "${box_dir}/${xdashboard}"
+    if [ -z "${ui_path}" ]; then
+      ui_path="./dashboard"
+      log Warning "配置文件中未找到 external-ui/external_ui 字段，使用默认路径: ${ui_path}"
+    fi
+    log Debug "配置文件中的 UI 路径: ${ui_path}"
+    
+    local dashboard_dir
+    if [[ "${ui_path}" == ./* ]]; then
+      dashboard_dir="${box_dir}/${bin_name}/${ui_path#./}"
+    elif [[ "${ui_path}" == /* ]]; then
+      dashboard_dir="${ui_path}"
+    else
+      dashboard_dir="${box_dir}/${bin_name}/${ui_path}"
+    fi
+    log Info "Dashboard 目标目录: ${dashboard_dir}"
+    
+    file_dashboard="${box_dir}/${bin_name}_dashboard.zip"
+    if [ -n "${ui_url}" ]; then
+      url="${ui_url}"
+    else
+      url="https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip"
+    fi
+    
+    if upfile "${file_dashboard}" "${url}"; then
+      if [ ! -d "${dashboard_dir}" ]; then
+        log Info "面板文件夹不存在, 正在创建: ${dashboard_dir}"
+        mkdir -p "${dashboard_dir}"
       else
-        log Info "Dashboard folder exists, cleaning old files"
-        rm -rf "${box_dir}/${xdashboard}/"*
+        log Debug "清理现有面板文件: ${dashboard_dir}"
+        rm -rf "${dashboard_dir}/"*
       fi
-    
+      
       if command -v unzip >/dev/null; then
         unzip_command="unzip"
-        log Info "Using system unzip"
       else
         unzip_command="busybox unzip"
-        log Info "Using busybox unzip"
       fi
-    
-      log Info "Extracting dashboard from ${file_dashboard}..."
-      "${unzip_command}" -o "${file_dashboard}" "${dir_name}/*" -d "${box_dir}/${xdashboard}" >/dev/null
-    
-      log Info "Moving extracted files to ${box_dir}/${xdashboard}/"
-      mv -f "${box_dir}/${xdashboard}/$dir_name"/* "${box_dir}/${xdashboard}/"
-    
-      log Info "Cleaning up temporary files"
+      
+      log Info "正在解压 Dashboard..."
+      local temp_extract_dir="${box_dir}/${bin_name}_dashboard_temp"
+      rm -rf "${temp_extract_dir}"
+      mkdir -p "${temp_extract_dir}"
+      
+      if "${unzip_command}" -oq "${file_dashboard}" -d "${temp_extract_dir}"; then
+        local html_path
+        html_path=$(busybox find "${temp_extract_dir}" -maxdepth 3 -type f -name index.html | head -n 1)
+        if [ -n "${html_path}" ]; then
+          local html_dir
+          html_dir="${html_path%/*}"
+          mv -f "${html_dir}"/* "${dashboard_dir}/"
+        else
+          local top_dir
+          top_dir=$(find "${temp_extract_dir}" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          if [ -n "${top_dir}" ] && [ -z "$(find "${temp_extract_dir}" -mindepth 1 -maxdepth 1 -type d | sed -n '2p')" ]; then
+            mv -f "${top_dir}"/* "${dashboard_dir}/"
+          else
+            mv -f "${temp_extract_dir}"/* "${dashboard_dir}/"
+          fi
+        fi
+      else
+        log Error "解压 Dashboard 失败"
+        rm -f "${file_dashboard}"
+        rm -rf "${temp_extract_dir}"
+        return 1
+      fi
+
+      if [ -z "$(find "${dashboard_dir}" -mindepth 1 -maxdepth 1 | head -n 1)" ]; then
+        log Error "Dashboard 目录为空，更新失败"
+        rm -f "${file_dashboard}"
+        rm -rf "${temp_extract_dir}"
+        return 1
+      fi
       rm -f "${file_dashboard}"
-      rm -rf "${box_dir}/${xdashboard}/${dir_name}"
-    
-      log Info "Dashboard update completed successfully"
+      rm -rf "${temp_extract_dir}"
+      log Info "Dashboard 更新成功 → ${dashboard_dir}"
     else
-      log Error "Failed to download dashboard"
+      log Error "下载 Dashboard 失败"
       return 1
     fi
     return 0
   else
-    log Debug "${bin_name} does not support dashboards"
+    log Debug "${bin_name} 不支持面板"
     return 1
   fi
 }
 
 cgroup_blkio() {
   local pid_file="$1"
-  local fallback_weight="${2:-900}"  # default weight jika pakai 'box'
+  local fallback_weight="${2:-900}"
 
   if [ -z "$pid_file" ] || [ ! -f "$pid_file" ]; then
-    log Warning "PID file missing or invalid: $pid_file"
+    log Warning "PID 文件丢失或无效: $pid_file"
     return 1
   fi
 
   local PID=$(<"$pid_file" 2>/dev/null)
-  if [ -z "$PID" ] || ! kill -0 "$PID" >/dev/null; then
-    log Warning "Invalid or dead PID: $PID"
+  if [ -z "$PID" ] || ! kill -0 "$PID" >/dev/null 2>&1; then
+    log Warning "来自 ${pid_file} 的 PID $PID 无效或未运行"
     return 1
   fi
 
-  # Temukan blkio path
   if [ -z "$blkio_path" ]; then
-    blkio_path=$(mount | busybox awk '/blkio/ {print $3}' | head -1)
+    blkio_path=$(mount | grep cgroup | busybox awk '/blkio/{print $3}' | head -1)
     if [ -z "$blkio_path" ] || [ ! -d "$blkio_path" ]; then
-      log Warning "blkio path not found"
+      log Warning "blkio cgroup 路径未找到"
       return 1
     fi
   fi
 
-  # Pilih target group: foreground jika ada, jika tidak buat box
-  local target
-  if [ -d "${blkio_path}/foreground" ]; then
-    target="${blkio_path}/foreground"
-    log Info "Using existing blkio group: foreground"
-  else
-    target="${blkio_path}/box"
-    mkdir -p "$target"
-    echo "$fallback_weight" > "${target}/blkio.weight"
-    log Info "Created blkio group: box with weight $fallback_weight"
+  local target="${blkio_path}/box"
+  
+  if [ ! -d "$target" ]; then
+    mkdir -p "$target" 2>/dev/null
+    if [ ! -d "$target" ]; then
+      log Warning "无法创建 box blkio 目录: $target"
+      if [ -d "${blkio_path}/foreground" ]; then
+        target="${blkio_path}/foreground"
+        log Info "回退使用现有 blkio 目录: foreground"
+      elif [ -d "${blkio_path}/top-app" ]; then
+        target="${blkio_path}/top-app"
+        log Info "回退使用现有 blkio 目录: top-app"
+      else
+        log Warning "blkio 目标未找到，无法设置 IO 权重"
+        return 1
+      fi
+    else
+      log Info "成功创建专用 box blkio 目录: $target"
+      echo "$fallback_weight" > "${target}/blkio.weight" 2>/dev/null
+      if [ $? -ne 0 ]; then
+        log Warning "无法设置 blkio 权重到 ${target}/blkio.weight"
+      else
+        log Info "已设置 blkio 权重: $fallback_weight"
+      fi
+    fi
   fi
 
-  echo "$PID" > "${target}/cgroup.procs" \
-    && log Info "Assigned PID $PID to $target"
-
-  return 0
+  echo "$PID" > "${target}/cgroup.procs" 2>/dev/null
+  if [ $? -eq 0 ]; then
+    log Info "已分配 PID $PID 到 ${target}，IO 权重 [$fallback_weight]"
+    return 0
+  else
+    log Warning "无法将 PID $PID 分配到 ${target}"
+    return 1
+  fi
 }
 
 cgroup_memcg() {
@@ -971,12 +1169,12 @@ cgroup_memcg() {
   local raw_limit="$2"
 
   if [ -z "$pid_file" ] || [ ! -f "$pid_file" ]; then
-    log Warning "PID file missing or invalid: $pid_file"
+    log Warning "PID 文件丢失或无效: $pid_file"
     return 1
   fi
 
   if [ -z "$raw_limit" ]; then
-    log Warning "memcg limit not specified"
+    log Warning "未指定 memcg 限制"
     return 1
   fi
 
@@ -992,42 +1190,72 @@ cgroup_memcg() {
       limit=$(( ${raw_limit%[Kk]} * 1024 ))
       ;;
     *[0-9])
-      limit=$raw_limit  # assume raw bytes
+      limit=$raw_limit
       ;;
     *)
-      log Warning "Invalid memcg limit format: $raw_limit"
+      log Warning "无效的 memcg 限制格式: $raw_limit"
       return 1
       ;;
   esac
 
   local PID
   PID=$(<"$pid_file" 2>/dev/null)
-  if [ -z "$PID" ] || ! kill -0 "$PID" >/dev/null; then
-    log Warning "Invalid or dead PID: $PID"
+  if [ -z "$PID" ] || ! kill -0 "$PID" >/dev/null 2>&1; then
+    log Warning "来自 ${pid_file} 的 PID $PID 无效或未运行"
     return 1
   fi
 
-  # Deteksi memcg_path jika belum diset
   if [ -z "$memcg_path" ]; then
     memcg_path=$(mount | grep cgroup | busybox awk '/memory/{print $3}' | head -1)
     if [ -z "$memcg_path" ] || [ ! -d "$memcg_path" ]; then
-      log Warning "memcg path could not be determined"
+      log Warning "memory cgroup 路径未找到"
       return 1
     fi
   fi
 
-  # Gunakan bin_name jika tersedia, default ke 'app'
-  local name="${bin_name:-app}"
-  local target="${memcg_path}/${name}"
-  mkdir -p "$target"
+  local target="${memcg_path}/box"
+  
+  if [ ! -d "$target" ]; then
+    mkdir -p "$target" 2>/dev/null
+    if [ ! -d "$target" ]; then
+      log Warning "无法创建 box memory 目录: $target"
+      local name="${bin_name:-app}"
+      target="${memcg_path}/${name}"
+      mkdir -p "$target" 2>/dev/null
+      if [ ! -d "$target" ]; then
+        log Warning "无法创建 memory 目录: $target"
+        return 1
+      fi
+      log Info "回退使用 memory 目录: $target"
+    else
+      log Info "成功创建专用 box memory 目录: $target"
+    fi
+  fi
 
-  echo "$limit" > "${target}/memory.limit_in_bytes" \
-    && log Info "Set memory limit for $name: ${limit} bytes"
+  local hr_limit="$limit B"
+  if [ "$limit" -ge 1073741824 ]; then
+    hr_limit="$(busybox awk -v b=$limit 'BEGIN{printf "%.2f GiB", b/1073741824}')"
+  elif [ "$limit" -ge 1048576 ]; then
+    hr_limit="$(busybox awk -v b=$limit 'BEGIN{printf "%.2f MiB", b/1048576}')"
+  elif [ "$limit" -ge 1024 ]; then
+    hr_limit="$(busybox awk -v b=$limit 'BEGIN{printf "%.2f KiB", b/1024}')"
+  fi
 
-  echo "$PID" > "${target}/cgroup.procs" \
-    && log Info "Assigned PID $PID to ${target}"
+  echo "$limit" > "${target}/memory.limit_in_bytes" 2>/dev/null
+  if [ $? -ne 0 ]; then
+    log Warning "无法设置内存限制到 ${target}/memory.limit_in_bytes"
+    return 1
+  fi
+  log Info "已设置内存限制: ${hr_limit} (${limit} 字节)"
 
-  return 0
+  echo "$PID" > "${target}/cgroup.procs" 2>/dev/null
+  if [ $? -eq 0 ]; then
+    log Info "已分配 PID $PID 到 ${target}，内存限制 [$hr_limit]"
+    return 0
+  else
+    log Warning "无法将 PID $PID 分配到 ${target}"
+    return 1
+  fi
 }
 
 cgroup_cpuset() {
@@ -1035,61 +1263,92 @@ cgroup_cpuset() {
   local cores="${2}"
 
   if [ -z "${pid_file}" ] || [ ! -f "${pid_file}" ]; then
-    log Warning "Missing or invalid PID file: ${pid_file}"
+    log Warning "PID 文件丢失或无效: ${pid_file}"
     return 1
   fi
 
   local PID
   PID=$(<"${pid_file}" 2>/dev/null)
   if [ -z "$PID" ] || ! kill -0 "$PID" >/dev/null; then
-    log Warning "PID $PID from ${pid_file} is not valid or not running"
+    log Warning "来自 ${pid_file} 的 PID $PID 无效或未运行"
     return 1
   fi
 
-  # Deteksi jumlah core jika cores belum ditentukan
   if [ -z "${cores}" ]; then
     local total_core
     total_core=$(nproc --all 2>/dev/null)
     if [ -z "$total_core" ] || [ "$total_core" -le 0 ]; then
-      log Warning "Failed to detect CPU cores"
+      log Warning "检测 CPU 核心失败"
       return 1
     fi
     cores="0-$((total_core - 1))"
   fi
 
-  # Deteksi cpuset_path
   if [ -z "${cpuset_path}" ]; then
     cpuset_path=$(mount | grep cgroup | busybox awk '/cpuset/{print $3}' | head -1)
     if [ -z "${cpuset_path}" ] || [ ! -d "${cpuset_path}" ]; then
-      log Warning "cpuset path not found"
+      log Warning "cpuset_path 未找到"
       return 1
     fi
   fi
 
-  local cpuset_target="${cpuset_path}/foreground"
+  local cpuset_target="${cpuset_path}/box"
+  
   if [ ! -d "${cpuset_target}" ]; then
-    cpuset_target="${cpuset_path}/top-app"
-  elif [ ! -d "${cpuset_target}" ]; then
-    cpuset_target="${cpuset_path}/apps"
-    [ ! -d "${cpuset_target}" ] && log Warning "cpuset target not found" && return 1
+    mkdir -p "${cpuset_target}" 2>/dev/null
+    if [ ! -d "${cpuset_target}" ]; then
+      log Warning "无法创建 box cpuset 目录: ${cpuset_target}"
+      cpuset_target="${cpuset_path}/foreground"
+      if [ ! -d "${cpuset_target}" ]; then
+        cpuset_target="${cpuset_path}/top-app"
+      fi
+      if [ ! -d "${cpuset_target}" ]; then
+        cpuset_target="${cpuset_path}/apps"
+        if [ ! -d "${cpuset_target}" ]; then
+          log Warning "cpuset 目标未找到，无法设置 CPU 核心"
+          return 1
+        fi
+      fi
+      log Info "回退使用现有 cpuset 目录: ${cpuset_target}"
+    else
+      log Info "成功创建专用 box cpuset 目录: ${cpuset_target}"
+      if [ -f "${cpuset_path}/cpus" ]; then
+        cat "${cpuset_path}/cpus" > "${cpuset_target}/cpus" 2>/dev/null
+      fi
+      if [ -f "${cpuset_path}/mems" ]; then
+        cat "${cpuset_path}/mems" > "${cpuset_target}/mems" 2>/dev/null
+      fi
+    fi
   fi
 
-  echo "${cores}" > "${cpuset_target}/cpus"
-  echo "0" > "${cpuset_target}/mems"
+  echo "${cores}" > "${cpuset_target}/cpus" 2>/dev/null
+  if [ $? -ne 0 ]; then
+    log Warning "无法设置 CPU 核心到 ${cpuset_target}/cpus"
+    return 1
+  fi
+  
+  echo "0" > "${cpuset_target}/mems" 2>/dev/null
+  if [ $? -ne 0 ]; then
+    log Warning "无法设置内存节点到 ${cpuset_target}/mems"
+    return 1
+  fi
 
-  echo "${PID}" > "${cpuset_target}/cgroup.procs" \
-    && log Info "Assigned PID $PID to ${cpuset_target} with CPU cores [$cores]"
-
-  return 0
+  echo "${PID}" > "${cpuset_target}/cgroup.procs" 2>/dev/null
+  if [ $? -eq 0 ]; then
+    log Info "已分配 PID $PID 到 ${cpuset_target}，CPU 核心 [$cores]"
+    return 0
+  else
+    log Warning "无法将 PID $PID 分配到 ${cpuset_target}"
+    return 1
+  fi
 }
 
-ip_port=$(if [ "${bin_name}" = "clash" ]; then busybox awk '/external-controller:/ {print $2}' "${clash_config}"; else find /data/adb/box/sing-box/ -type f -name 'config.json' -exec busybox awk -F'[:,]' '/external_controller/ {print $2":"$3}' {} \; | sed 's/^[ \t]*//;s/"//g'; fi;)
-secret=""
-
 webroot() {
-path_webroot="/data/adb/modules/box_for_root/webroot/index.html"
-touch -n > $path_webroot
-  if [[ "${bin_name}" = @(clash|sing-box) ]]; then
+  ip_port=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/external-controller:/ {print $2}' "${mihomo_config}"; else busybox awk -F'[:,]' '/"external_controller"/ {print $2":"$3}' "${sing_config}" | sed 's/^[ \t]*//;s/"//g'; fi;)
+  secret=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/^secret:/ {print $2}' "${mihomo_config}" | sed 's/"//g'; else busybox awk -F'"' '/"secret"/ {print $4}' "${sing_config}" | head -n 1; fi;)
+  path_webroot="/data/adb/modules/box_for_root/webroot/index.html"
+  touch "$path_webroot"
+  if [[ "${bin_name}" = @(mihomo|sing-box) ]]; then
     echo -e '
   <!DOCTYPE html>
   <script>
@@ -1101,11 +1360,11 @@ touch -n > $path_webroot
   else
    echo -e '
   <!DOCTYPE html>
-  <html lang="en">
+  <html lang="zh-CN">
   <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Unsupported Dashboard</title>
+      <title>不支持WebUI</title>
       <style>
           body {
               font-family: Arial, sans-serif;
@@ -1118,47 +1377,92 @@ touch -n > $path_webroot
       </style>
   </head>
   <body>
-      <h1>Unsupported Dashboard</h1>
-      <p>Sorry, xray/v2ray does not support the necessary Dashboard features.</p>
+      <h1>不支持WebUI</h1>
+      <p>抱歉，xray/v2ray 不支持所需的WebUI功能。</p>
   </body>
   </html>' > $path_webroot
   fi
+  log Info "已生成/更新 WebUI 页面: ${path_webroot} → http://${ip_port}/ui/ (内核: ${bin_name})"
 }
 
 bond0() {
-  # Menonaktifkan mode low latency untuk TCP
   sysctl -w net.ipv4.tcp_low_latency=0 >/dev/null 2>&1
-  log Debug "tcp low latency: 0"
+  log Debug "tcp 低延迟: 0"
 
-  # Mengatur panjang antrian transmisi (txqueuelen) menjadi 3000 untuk semua interface wireless (wlan*)
   for dev in /sys/class/net/wlan*; do ip link set dev $(basename $dev) txqueuelen 3000; done
-  log Debug "wlan* txqueuelen: 3000"
+  log Debug "wlan* 传输队列长度: 3000"
 
-  # Mengatur panjang antrian transmisi (txqueuelen) menjadi 1000 untuk semua interface rmnet_data*
   for txqueuelen in /sys/class/net/rmnet_data*; do txqueuelen_name=$(basename $txqueuelen); ip link set dev $txqueuelen_name txqueuelen 1000; done
-  log Debug "rmnet_data* txqueuelen: 1000"
+  log Debug "rmnet_data* 传输队列长度: 1000"
 
-  # Mengatur MTU (Maximum Transmission Unit) menjadi 1500 untuk semua interface rmnet_data*
   for mtu in /sys/class/net/rmnet_data*; do mtu_name=$(basename $mtu); ip link set dev $mtu_name mtu 1500; done
-  log Debug "rmnet_data* mtu: 1500"
+  log Debug "rmnet_data* MTU: 1500"
 }
 
 bond1() {
-  # Mengaktifkan mode low latency untuk TCP
   sysctl -w net.ipv4.tcp_low_latency=1 >/dev/null 2>&1
-  log Debug "tcp low latency: 1"
+  log Debug "tcp 低延迟: 1"
 
-  # Mengatur panjang antrian transmisi (txqueuelen) menjadi 4000 untuk semua interface wireless (wlan*)
   for dev in /sys/class/net/wlan*; do ip link set dev $(basename $dev) txqueuelen 4000; done
-  log Debug "wlan* txqueuelen: 4000"
+  log Debug "wlan* 传输队列长度: 4000"
 
-  # Mengatur panjang antrian transmisi (txqueuelen) menjadi 2000 untuk semua interface rmnet_data*
   for txqueuelen in /sys/class/net/rmnet_data*; do txqueuelen_name=$(basename $txqueuelen); ip link set dev $txqueuelen_name txqueuelen 2000; done
-  log Debug "rmnet_data* txqueuelen: 2000"
+  log Debug "rmnet_data* 传输队列长度: 2000"
 
-  # Mengatur MTU (Maximum Transmission Unit) menjadi 9000 untuk semua interface rmnet_data*
   for mtu in /sys/class/net/rmnet_data*; do mtu_name=$(basename $mtu); ip link set dev $mtu_name mtu 9000; done
-  log Debug "rmnet_data* mtu: 9000"
+  log Debug "rmnet_data* MTU: 9000"
+}
+
+# ColorOS Google 防火墙规则清理
+gfw() {
+  _remove_reject_rules() {
+    local table=$1 chain=$2 proto=$3 cmd
+    case "$proto" in
+      ipv4) cmd="iptables" ;;
+      ipv6) cmd="ip6tables" ;;
+      *) return 0 ;;
+    esac
+    command -v "$cmd" > /dev/null 2>&1 || return 0
+    $cmd -t "$table" -nvL "$chain" > /dev/null 2>&1 || return 0
+    local nums
+    nums=$($cmd -t "$table" --line-numbers -nvL "$chain" 2>/dev/null \
+      | awk '/REJECT/{print $1}' | sort -rn)
+    [ -z "$nums" ] && return 0
+    local count=0
+    for n in $nums; do
+      [ "$n" -gt 0 ] && $cmd -t "$table" -D "$chain" "$n" 2>/dev/null \
+        && count=$((count + 1))
+    done
+    return "$count"
+  }
+  local total=0
+  for _chain in fw_INPUT fw_OUTPUT fw_OUTPUT_oplus_dns; do
+    for _proto in ipv4 ipv6; do
+      _remove_reject_rules filter "$_chain" "$_proto"
+      total=$((total + $?))
+    done
+  done
+  [ "$total" -gt 0 ] \
+    && log Debug "Google 防火墙拦截规则已清理(${total}条)" \
+    || log Debug "Google 防火墙拦截规则无需清理"
+}
+
+# 关闭 USB 调试
+adb_disable() {
+  _try_disable_adb() {
+    [ "$(settings get global adb_enabled 2>/dev/null)" = "0" ] && return 0
+    settings put global adb_enabled 0
+    sleep 0.5
+    [ "$(settings get global adb_enabled 2>/dev/null)" = "0" ] && return 0 || return 1
+  }
+  _try_disable_adb \
+    && log Debug "USB 调试已处于关闭状态" \
+    || {
+      settings put global adb_enabled 0
+      [ "$(settings get global adb_enabled 2>/dev/null)" = "0" ] \
+        && log Debug "USB 调试经二次校验关闭成功" \
+        || log Error "USB 调试关闭失败"
+    }
 }
 
 case "$1" in
@@ -1184,9 +1488,15 @@ case "$1" in
   bond0|bond1)
     $1
     ;;
+  gfw)
+    gfw
+    ;;    
+  adb_disable)
+    adb_disable
+    ;;                    
   geosub)
+    upsubs || exit 1
     upgeox
-    upsubs
     if [ -f "${box_pid}" ]; then
       kill -0 "$(<"${box_pid}" 2>/dev/null)" && reload
     fi
@@ -1195,18 +1505,27 @@ case "$1" in
     if [ "$1" = "geox" ]; then
       upgeox
     else
-      upsubs
-      [ "${bin_name}" != "clash" ] && exit 1
+      upsubs || exit 1
     fi
     if [ -f "${box_pid}" ]; then
       kill -0 "$(<"${box_pid}" 2>/dev/null)" && reload
     fi
     ;;
   upkernel)
-    upkernel
+    upkernel "$2"
+    ;;  
+  upkernels)
+    shift
+    upkernels "$@"
+    ;;
+  upgeox_all)
+    upgeox_all
     ;;
   upxui)
     upxui
+    ;;
+  upcnip)
+    upcnip
     ;;
   upyq|upcurl)
     $1
@@ -1218,39 +1537,18 @@ case "$1" in
     webroot
     ;;
   all)
-    update_geo="true"
-    for bin_name in "$2"; do
-      upkernel
-      upgeox
+    upyq
+    upcurl
+    upgeox_all
+    upkernels sing-box mihomo xray v2fly hysteria
+    for bin_name in "${bin_list[@]}"; do
       upsubs
       upxui
     done
     ;;
-  help|-h|--help|"")
-    echo "Usage: $0 <command>"
-    echo
-    echo "Commands:"
-    echo "  check       - Check Configuration"
-    echo "  memcg       - Apply memory cgroup limit to process"
-    echo "  cpuset      - Apply CPU core affinity to process"
-    echo "  blkio       - Apply I/O weight limit to process"
-    echo "  bond0|bond1 - Run bonding configuration functions"
-    echo "  geosub      - Update both subscription and GeoX files, then reload if running"
-    echo "  geox        - Update GeoX database, then reload if running"
-    echo "  subs        - Update subscription (only for clash), then reload if running"
-    echo "  upkernel    - Update kernel-related components"
-    echo "  upxui       - Update XUI panel"
-    echo "  upyq        - Update yq binary"
-    echo "  upcurl      - Update curl binary"
-    echo "  reload      - Reload running service configuration"
-    echo "  webroot     - Update/rebuild webroot files"
-    echo "  all         - Run all update commands in sequence"
-    echo
-    echo "Example:"
-    echo "  $0 check"
-    ;;
   *)
-    echo "${red}$0 $1 not found${normal}"
-    echo "Run '$0 help' for usage."
+    log Error "$0 $1 未找到"
+    log Info "用法: $0 {check|memcg|cpuset|blkio|geosub|geox|subs|upkernel [name]|upkernels [name...]|upgeox_all|upxui|upyq|upcurl|upcnip|reload|webroot|bond0|bond1|all}"
+    log Info "upkernel 支持的核心: sing-box, mihomo, mihomo_smart, xray, v2fly, hysteria"
     ;;
 esac
