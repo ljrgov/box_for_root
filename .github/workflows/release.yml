@@ -31,6 +31,9 @@ jobs:
       # 3. 更新 update.json, module.prop, and CHANGELOG.md
       - name: Update files
         run: |
+          # 核心修复：强制统一格式，避免出现 vv 或少 v
+          INPUT_TAG="${{ github.event.inputs.tag }}"
+          VERSION="v${INPUT_TAG#v}"
           VERSION="${{ github.event.inputs.tag }}"
           DATE_NUM="${{ steps.get_version.outputs.date }}"
           DATE_HUMAN=$(date +%d-%m-%y)
@@ -82,7 +85,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.event.inputs.tag }}
-          files: box_for_root-*.zip
+          files: box_for_root-v*.zip
           generate_release_notes: true
           body: |
             #### Changelog v${{ github.event.inputs.tag }}
