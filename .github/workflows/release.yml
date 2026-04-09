@@ -33,8 +33,9 @@ jobs:
         run: |
           # 核心修复：强制统一格式，避免出现 vv 或少 v
           INPUT_TAG="${{ github.event.inputs.tag }}"
-          VERSION="v${INPUT_TAG#v}"
-          VERSION="${{ github.event.inputs.tag }}"
+          VERSION="${{ github.event.inputs.tag }}" 
+          VERSION="${VERSION//v/}"
+          VERSION="v$VERSION"
           DATE_NUM="${{ steps.get_version.outputs.date }}"
           DATE_HUMAN=$(date +%d-%m-%y)
           CHANGELOG="${{ github.event.inputs.changelog }}"
