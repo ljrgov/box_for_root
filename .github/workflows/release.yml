@@ -85,7 +85,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.event.inputs.tag }}
-          files: box_for_root-v*.zip
+          files: box_for_root-*.zip
           generate_release_notes: true
           body: |
             #### Changelog v${{ github.event.inputs.tag }}
