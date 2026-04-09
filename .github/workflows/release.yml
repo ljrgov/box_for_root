@@ -44,7 +44,7 @@ jobs:
           {
             "version": "$VERSION",
             "versionCode": "$DATE_NUM",
-            "zipUrl": "https://github.com/ljrgov/box_for_root/releases/download/$INPUT_TAG/box_for_root-$VERSION.zip",
+            "zipUrl": "https://github.com/ljrgov/box_for_root/releases/download/$VERSION/box_for_root-$VERSION.zip",
             "changelog": "https://raw.githubusercontent.com/ljrgov/box_for_root/refs/heads/master/CHANGELOG.md"
           }
           EOF
@@ -84,11 +84,11 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: "$INPUT_TAG"
+          tag_name: "$VERSION"
           files: box_for_root-*.zip
           generate_release_notes: true
           body: |
-            #### Changelog v$VERSION
+            #### Changelog $VERSION
             ${{ github.event.inputs.changelog }} 
 
       # 7. 上传到 Telegram
