@@ -26,7 +26,7 @@ jobs:
       # 2. 生成版本日期
       - name: Get Version
         id: get_version
-        run: echo "date=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
+        run: echo "date=$(TZ='Asia/Shanghai' date +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
       # 3. 更新 update.json, module.prop, and CHANGELOG.md
       - name: Update files
@@ -36,7 +36,7 @@ jobs:
           VERSION="${INPUT_TAG//v/}"
           VERSION="v$VERSION"
           DATE_NUM="${{ steps.get_version.outputs.date }}"
-          DATE_HUMAN=$(date +%Y/%m/%d)
+          DATE_HUMAN=$(TZ='Asia/Shanghai' date +%Y/%m/%d)
           CHANGELOG="${{ github.event.inputs.changelog }}"
 
           # update.json
@@ -84,7 +84,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: "$VERSION"
+          tag_name: $VERSION
           files: box_for_root-*.zip
           generate_release_notes: true
           body: |
@@ -101,7 +101,7 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
           # 核心版本信息
-          export VERSION="$VERSION"
+          export VERSION=$VERSION
           
           # 显示设置为空
           export COMMIT=""
