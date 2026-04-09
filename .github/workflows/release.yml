@@ -36,8 +36,9 @@ jobs:
           VERSION="${{ github.event.inputs.tag }}" 
           VERSION="${VERSION//v/}"
           VERSION="v$VERSION"
+          TAG="$VERSION"
           DATE_NUM="${{ steps.get_version.outputs.date }}"
-          DATE_HUMAN=$(date +%d-%m-%y)
+          DATE_HUMAN=$(date +%Y/%m/%d)
           CHANGELOG="${{ github.event.inputs.changelog }}"
 
           # update.json
