@@ -1,3 +1,1 @@
-### APK文件
-
-> **上游开发的APK可配合本模块软件**
+> **APK(boxproxy/taamarin) → 可配合本模块**
