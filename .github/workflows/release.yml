@@ -26,7 +26,7 @@ jobs:
       # 2. 生成版本日期
       - name: Get Version
         id: get_version
-        run: echo "date=$(TZ='Asia/Shanghai' date +%Y%m%d)" >> "$GITHUB_OUTPUT"
+        run: echo "date=$(TZ='Asia/Shanghai' date +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
 
       # 3. 更新 update.json, module.prop, and CHANGELOG.md
       - name: Update files
