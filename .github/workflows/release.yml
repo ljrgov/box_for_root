@@ -42,8 +42,8 @@ jobs:
           # update.json
           cat > update.json <<EOF
           {
+            "versionCode": $DATE_NUM,
             "version": "$VERSION",
-            "versionCode": "$DATE_NUM",
             "zipUrl": "https://github.com/ljrgov/box_for_root/releases/download/${{ github.event.inputs.tag }}/box_for_root-$VERSION.zip",
             "changelog": "https://raw.githubusercontent.com/ljrgov/box_for_root/refs/heads/master/CHANGELOG.md"
           }
