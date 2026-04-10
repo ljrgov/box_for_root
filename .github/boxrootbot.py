@@ -39,11 +39,11 @@ def get_caption():
     if is_debug:
         # 调试版：
         version_display = f"{version}"
-        tags = "#预发布版     #moudle     #root"
+        tags = "#moudle    #root    #pre-release"
     else:
         # 正式版：
         version_display = version
-        tags = "#稳定版     #moudle     #root"
+        tags = "#moudle    #root    #release"
 
     # 构建最终消息（手动拼接，防止模板 format 报错）
     msg = (
