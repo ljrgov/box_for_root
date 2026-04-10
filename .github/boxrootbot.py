@@ -14,7 +14,6 @@ COMMIT = os.environ.get("COMMIT", "n/a")
 DATE = os.environ.get("DATE", "")
 CHANGELOG = os.environ.get("CHANGELOG", "No changelog provided.")
 
-
 def check_environ():
     # 核心的 TG 连接参数为必填
     required = {
