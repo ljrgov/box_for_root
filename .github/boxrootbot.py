@@ -19,7 +19,7 @@ MSG_TEMPLATE = """
 
 **版本:** {version}
 **日期:** {date}
-**内容:** {changelog}
+{changelog}
 
 [仓库地址](https://github.com/ljrgov/box_for_root) | [Release 详情](https://github.com/ljrgov/box_for_root/releases)
 
@@ -51,18 +51,18 @@ def get_caption():
     if is_debug:
         # 调试版：
         version_display = f"{version}"
-        tags = "#moudle   #root   #debug"
+        tags = "#预发布版    #moudle   #root"
     else:
         # 正式版：
         version_display = version
-        tags = "#moudle   #root"
+        tags = "#稳定版    #moudle   #root"
 
     # 构建最终消息（手动拼接，防止模板 format 报错）
     msg = (
         "📦 **KernelSU/Magisk/Apatch模块**\n\n"
         f"**版本:** {version_display}\n"
         f"**日期:** {date}\n"
-        f"**内容:** {changelog}\n\n"
+        f"{changelog}\n\n"
         "[仓库地址](https://github.com/ljrgov/box_for_root) | "
         "[发布详情](https://github.com/ljrgov/box_for_root/releases)\n\n"
         f"{tags}"
