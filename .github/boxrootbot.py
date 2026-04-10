@@ -14,17 +14,6 @@ COMMIT = os.environ.get("COMMIT", "n/a")
 DATE = os.environ.get("DATE", "")
 CHANGELOG = os.environ.get("CHANGELOG", "No changelog provided.")
 
-MSG_TEMPLATE = """
-📦 **KernelSU/Magisk/Apatch模块**
-
-**版本:** {version}
-**日期:** {date}
-{changelog}
-
-[仓库地址](https://github.com/ljrgov/box_for_root) | [Release 详情](https://github.com/ljrgov/box_for_root/releases)
-
-#moudle   #root
-""".strip()
 
 def check_environ():
     # 核心的 TG 连接参数为必填
@@ -44,18 +33,18 @@ def get_caption():
     version = os.environ.get("VERSION", "Unknown")
     commit = os.environ.get("COMMIT", "")
     date = os.environ.get("DATE", "")
-    changelog = os.environ.get("CHANGELOG", "无更新日志")
+    changelog = os.environ.get("CHANGELOG", "无更新说明")
 
     is_debug = commit and commit != ""
 
     if is_debug:
         # 调试版：
         version_display = f"{version}"
-        tags = "#预发布版    #moudle   #root"
+        tags = "#预发布版     #moudle     #root"
     else:
         # 正式版：
         version_display = version
-        tags = "#稳定版    #moudle   #root"
+        tags = "#稳定版     #moudle     #root"
 
     # 构建最终消息（手动拼接，防止模板 format 报错）
     msg = (
