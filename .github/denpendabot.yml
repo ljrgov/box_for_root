@@ -11,7 +11,7 @@ updates:
       github-actions-group:
         patterns:
           - "*"
-    open-pull-requests-limit: 1 # 合并了，1 个足矣
+    open-pull-requests-limit: 1 # 合并为1个
     labels:
       - "dependencies"
       - "github-actions"
