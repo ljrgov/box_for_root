@@ -47,7 +47,7 @@ def get_caption():
 
     # 构建最终消息（手动拼接，防止模板 format 报错）
     msg = (
-        "📦 **KernelSU/Magisk/Apatch模块**\n\n"
+        "**KernelSU/Magisk/Apatch模块**\n\n"
         f"**版本:** {version_display}\n"
         f"**日期:** {date}\n"
         f"{changelog}\n\n"
